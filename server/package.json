@@ -10,7 +10,7 @@
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "orange-orm": "file:../vendor/orange-orm-5.2.0.tgz",
+    "orange-orm": "https://github.com/alfateam/orange-orm/archive/refs/heads/master.tar.gz",
     "pg": "^8.13.1"
   }
 }

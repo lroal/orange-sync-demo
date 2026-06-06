@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "pack:orange-orm": "node scripts/pack-orange-orm.mjs",
     "postinstall": "node scripts/install.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:server": "npm run dev --prefix server",
