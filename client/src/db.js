@@ -1,13 +1,12 @@
 import rdb from 'orange-orm';
-import { createDemoMap, demoDbOptions, syncTables } from '../../shared/schema.js';
+import { createDemoMap } from '../../shared/schema.js';
 
 const syncUrl = import.meta.env.VITE_SYNC_URL || 'http://localhost:3055/rdb';
 const map = createDemoMap(rdb);
-const localDb = rdb.sqliteOPFS('orange-sync-demo.sqlite3', {
+export const db = map.sqliteOPFS('orange-sync-demo.sqlite3', {
   busyTimeoutMs: 5000,
   sync: {
     url: syncUrl,
-    tables: syncTables,
     auto: 
     {
       intervalMs: 3000,
@@ -15,11 +14,6 @@ const localDb = rdb.sqliteOPFS('orange-sync-demo.sqlite3', {
       pull: false
     }
   }
-});
-
-export const db = map({
-  db: localDb,
-  ...demoDbOptions
 });
 
 export async function initLocalSchema() {

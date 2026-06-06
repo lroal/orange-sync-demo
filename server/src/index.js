@@ -3,7 +3,7 @@ import cors from 'cors';
 import express from 'express';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { createDemoMap, demoDbOptions, syncTables } from '../../shared/schema.js';
+import { createDemoMap, demoDbOptions } from '../../shared/schema.js';
 
 const require = createRequire(import.meta.url);
 const rdb = require('orange-orm');
@@ -129,7 +129,7 @@ app.listen(port, () => {
 
 async function initDatabase() {
   await runStatements(db, schemaSql);
-  await setupChangeTracking(db, pickTables(db.tables, syncTables));
+  await setupChangeTracking(db, db.tables);
   await seedIfEmpty();
 }
 
@@ -171,10 +171,6 @@ async function seedIfEmpty() {
       { assigneeId: grace.id, title: 'Verify worker-backed SQLite', done: false, sortOrder: 1 }
     ]
   });
-}
-
-function pickTables(tables, names) {
-  return Object.fromEntries(names.map((name) => [name, tables[name]]));
 }
 
 async function runStatements(targetDb, sql) {

@@ -60,5 +60,3 @@ export const demoDbOptions = {
     }
   }
 };
-
-export const syncTables = ['team', 'person', 'project', 'projectDetail', 'task'];
