@@ -1,4 +1,6 @@
-export function createDemoMap(rdb) {
+import rdb from 'orange-orm';
+
+export function createDemoMap() {
   return rdb.map((x) => ({
     team: x.table('team').map(({ column }) => ({
       id: column('id').numeric().primary().notNullExceptInsert(),

@@ -1,8 +1,7 @@
-import rdb from 'orange-orm';
 import { createDemoMap } from '../../shared/schema.js';
 
 const syncUrl = import.meta.env.VITE_SYNC_URL || 'http://localhost:3055/rdb';
-const map = createDemoMap(rdb);
+const map = createDemoMap();
 export const db = map.sqliteOPFS('orange-sync-demo.sqlite3', {
   busyTimeoutMs: 5000,
   sync: {

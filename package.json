@@ -11,5 +11,8 @@
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down -v",
     "install:all": "npm install"
+  },
+  "dependencies": {
+    "orange-orm": "https://github.com/alfateam/orange-orm/archive/refs/heads/sync.tar.gz"
   }
 }

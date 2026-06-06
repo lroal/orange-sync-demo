@@ -14,7 +14,7 @@ const { setupChangeTracking } = require(path.join(path.dirname(orangeOrmMain), '
 const port = Number(process.env.PORT || 3055);
 const connectionString = process.env.DATABASE_URL || 'postgres://orange:orange@localhost:54329/orange_sync_demo';
 
-const map = createDemoMap(rdb);
+const map = createDemoMap();
 const db = map({
   db: (con) => con.pg(connectionString, { size: 4 }),
   ...demoDbOptions
