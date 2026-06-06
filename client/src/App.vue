@@ -20,10 +20,21 @@ onMounted(async () => {
     await initLocalSchema();
     await refreshLocal();
   });
-  await db.syncClient.start();
-  await refreshLocal();
-  lastSync.value = new Date();
-  status.value = 'Idle';
+  db.syncClient.on('pull', async () => {
+    lastSync.value = new Date();
+    await refreshLocal();
+  });
+  db.syncClient.on('push', () => {
+    lastSync.value = new Date();
+  });
+  db.syncClient.on('error', ({ error }) => {
+    status.value = error.message || String(error);
+  });
+  await run('Starting auto sync', async () => {
+    await db.syncClient.start();
+    await refreshLocal();
+    lastSync.value = new Date();
+  });
 });
 
 async function refreshLocal() {

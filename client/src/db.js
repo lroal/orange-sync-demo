@@ -9,8 +9,8 @@ export const db = map.sqliteOPFS('orange-sync-demo.sqlite3', {
     auto: 
     {
       intervalMs: 3000,
-      push: false,
-      pull: false
+      push: true,
+      pull: true
     }
   }
 });
