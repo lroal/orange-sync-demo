@@ -13,6 +13,7 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "orange-orm": "https://github.com/alfateam/orange-orm/archive/refs/heads/sync.tar.gz"
+    "orange-orm": "file:../orange-orm",
+    "pg": "^8.21.0"
   }
 }

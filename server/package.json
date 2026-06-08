@@ -10,7 +10,7 @@
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "orange-orm": "https://github.com/alfateam/orange-orm/archive/refs/heads/sync.tar.gz",
+    "orange-orm": "file:../../orange-orm",
     "pg": "^8.13.1"
   }
 }
