@@ -1,11 +1,9 @@
 import { createDemoMap } from '../../shared/schema.js';
-import SqliteOPFSWorker from 'orange-orm/sqliteOPFS/worker?worker';
 
 const syncUrl = import.meta.env.VITE_SYNC_URL || 'http://localhost:3055/rdb';
 const map = createDemoMap();
 export const db = map.sqliteOPFS('orange-sync-demo.sqlite3', {
   busyTimeoutMs: 5000,
-  createWorker: () => new SqliteOPFSWorker(),
   sync: {
     url: syncUrl,
     tables: ['team', 'person', 'project', 'projectDetail', 'task'],

@@ -13,7 +13,7 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "orange-orm": "file:../orange-orm",
+    "orange-orm": "git+ssh://git@github.com/alfateam/orange-orm.git#sync",
     "pg": "^8.21.0"
   }
 }
