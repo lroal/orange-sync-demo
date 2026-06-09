@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
-import { db, initLocalSchema } from './db.js';
+import { db } from './db.js';
+import rdb from 'orange-orm';
+rdb.on('query', console.dir);
 
 const projects = ref([]);
 const people = ref([]);
@@ -16,11 +18,8 @@ const selectedProject = computed(() =>
 );
 
 onMounted(async () => {
-  await run('Ready local SQLite', async () => {
-    await initLocalSchema();
-    await refreshLocal();
-  });
   db.syncClient.on('pull', async () => {
+    console.dir('on pull');
     lastSync.value = new Date();
     await refreshLocal();
   });
@@ -32,12 +31,11 @@ onMounted(async () => {
   });
   await run('Starting auto sync', async () => {
     await db.syncClient.start();
-    await refreshLocal();
-    lastSync.value = new Date();
   });
 });
 
 async function refreshLocal() {
+  console.dir('refreshLocal')
   const [projectRows, personRows] = await Promise.all([
     db.project.getAll({
       owner: { team: {} },
@@ -55,8 +53,6 @@ async function refreshLocal() {
 async function pull() {
   await run('Pulling server changes', async () => {
     await db.syncClient.pull();
-    lastSync.value = new Date();
-    await refreshLocal();
   });
 }
 
