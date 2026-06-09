@@ -35,19 +35,25 @@ onMounted(async () => {
 });
 
 async function refreshLocal() {
-  console.dir('refreshLocal')
-  const [projectRows, personRows] = await Promise.all([
-    db.project.getAll({
-      owner: { team: {} },
-      detail: {},
-      tasks: { assignee: {} }
-    }),
-    db.person.getAll({ team: {} })
-  ]);
-  projects.value = projectRows.sort((a, b) => a.id - b.id);
-  people.value = personRows.sort((a, b) => a.name.localeCompare(b.name));
-  if (!selectedProjectId.value && projects.value.length > 0)
-    selectedProjectId.value = projects.value[0].id;
+  const startedAt = performance.now();
+  try {
+    const [projectRows, personRows] = await Promise.all([
+      db.project.getAll({
+        owner: { team: {} },
+        detail: {},
+        tasks: { assignee: {} }
+      }),
+      db.person.getAll({ team: {} })
+    ]);
+    projects.value = projectRows.sort((a, b) => a.id - b.id);
+    people.value = personRows.sort((a, b) => a.name.localeCompare(b.name));
+    if (!selectedProjectId.value && projects.value.length > 0)
+      selectedProjectId.value = projects.value[0].id;
+  }
+  finally {
+    const elapsedMs = performance.now() - startedAt;
+    console.info(`[timing] refreshLocal took ${elapsedMs.toFixed(1)} ms`);
+  }
 }
 
 async function pull() {
@@ -99,12 +105,24 @@ async function createProject() {
 }
 
 async function toggleTask(task) {
-  await run('Saving local task change', async () => {
-    const row = await db.task.getById(task.id);
-    row.done = !row.done;
-    await row.saveChanges();
-    await refreshLocal();
-  });
+  const startedAt = performance.now();
+  try {
+    await run('Saving local task change', async () => {
+      task.done = !task.done;
+      await projects.saveChanges();
+      // const row = await db.task.getById(task.id);
+      // row.done = !row.done;
+      // await row.saveChanges();
+      // await refreshLocal();
+    });
+  }
+  catch(e) {
+    console.dir(e);
+  }
+  finally {
+    const elapsedMs = performance.now() - startedAt;
+    console.log(`[timing] toggleTask took ${elapsedMs.toFixed(1)} ms`);
+  }
 }
 
 async function addTask() {

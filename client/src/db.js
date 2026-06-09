@@ -6,8 +6,7 @@ export const db = map.sqliteOPFS('orange-sync-demo.sqlite3', {
   busyTimeoutMs: 5000,
   sync: {
     url: syncUrl,
-    auto: false,
-    
+    auto: false
     //  {
     //   intervalMs: 8000,
     //   push: true,
