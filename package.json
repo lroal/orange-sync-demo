@@ -5,6 +5,7 @@
   "scripts": {
     "postinstall": "node scripts/install.mjs",
     "dev": "node scripts/dev.mjs",
+    "dev:opfs": "node scripts/dev.mjs --opfs",
     "dev:server": "npm run dev --prefix server",
     "dev:client": "npm run dev --prefix client",
     "build:client": "npm run build --prefix client",

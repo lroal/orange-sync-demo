@@ -1,11 +1,27 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, reactive, ref, shallowRef } from 'vue';
 import { db } from './db.js';
 import rdb from 'orange-orm';
-rdb.on('query', console.dir);
+db.reactive(reactive);
 
-const projects = ref([]);
-const people = ref([]);
+rdb.on('queryComplete', ({ sql, parameters, elapsedMs, workerElapsedMs, error }) => {
+	const workerPart = typeof workerElapsedMs === 'number'
+		? `, worker ${workerElapsedMs.toFixed(1)} ms`
+		: '';
+	console.info(`[sql] ${elapsedMs.toFixed(1)} ms${workerPart}${error ? ' failed' : ''}`, { sql, parameters });
+});
+
+rdb.on('sqliteOpen', ({ connectionString, filename, requestedVfs, vfs, fallback, readonly }) => {
+	const fallbackPart = fallback ? ', fallback' : '';
+	const readonlyPart = readonly ? ', readonly' : '';
+	console.info(`[sqliteOPFS] opened vfs=${vfs}, requested=${requestedVfs}${fallbackPart}${readonlyPart}`, {
+		connectionString,
+		filename
+	});
+});
+
+const projects = shallowRef([]);
+const people = shallowRef([]);
 const selectedProjectId = ref(null);
 const status = ref('Booting local database');
 const busy = ref(false);
@@ -35,30 +51,46 @@ onMounted(async () => {
 });
 
 async function refreshLocal() {
-  const startedAt = performance.now();
-  try {
-    const [projectRows, personRows] = await Promise.all([
-      db.project.getAll({
-        owner: { team: {} },
-        detail: {},
-        tasks: { assignee: {} }
-      }),
-      db.person.getAll({ team: {} })
-    ]);
-    projects.value = projectRows.sort((a, b) => a.id - b.id);
-    people.value = personRows.sort((a, b) => a.name.localeCompare(b.name));
+	const startedAt = performance.now();
+	try {
+		const fetchStartedAt = performance.now();
+		const [fetchedProjectRows, personRows] = await Promise.all([
+			time('db.project.getAll with relations', () => db.project.getAll({
+				owner: { team: {} },
+				detail: {},
+				tasks: { assignee: {}, orderBy: 'sortOrder' },
+				orderBy: 'id'
+			})),
+			time('db.person.getAll with team', () => db.person.getAll({ team: {}, orderBy: 'name' }))
+		]);
+		console.info(`[timing] project/person Promise.all getAll took ${(performance.now() - fetchStartedAt).toFixed(1)} ms`);
+
+    const viewStartedAt = performance.now();
+    projects.value = fetchedProjectRows;
+    people.value = personRows;
     if (!selectedProjectId.value && projects.value.length > 0)
       selectedProjectId.value = projects.value[0].id;
+    console.info(`[timing] refreshLocal view assignment took ${(performance.now() - viewStartedAt).toFixed(1)} ms`);
   }
   finally {
     const elapsedMs = performance.now() - startedAt;
     console.info(`[timing] refreshLocal took ${elapsedMs.toFixed(1)} ms`);
-  }
+	}
+}
+
+async function time(label, fn) {
+	const startedAt = performance.now();
+	try {
+		return await fn();
+	}
+	finally {
+		console.info(`[timing] ${label} took ${(performance.now() - startedAt).toFixed(1)} ms`);
+	}
 }
 
 async function pull() {
-  await run('Pulling server changes', async () => {
-    await db.syncClient.pull();
+	await run('Pulling server changes', async () => {
+		await db.syncClient.pull();
   });
 }
 
@@ -108,8 +140,14 @@ async function toggleTask(task) {
   const startedAt = performance.now();
   try {
     await run('Saving local task change', async () => {
+      const mutateStartedAt = performance.now();
       task.done = !task.done;
-      await projects.saveChanges();
+      console.info(`[timing] toggleTask mutate row took ${(performance.now() - mutateStartedAt).toFixed(1)} ms`);
+
+      const saveStartedAt = performance.now();
+      await projects.value.saveChanges({});
+      console.info(`[timing] toggleTask saveChanges took ${(performance.now() - saveStartedAt).toFixed(1)} ms`);
+
       // const row = await db.task.getById(task.id);
       // row.done = !row.done;
       // await row.saveChanges();
@@ -147,11 +185,9 @@ async function flipStatus() {
   if (!project)
     return;
   await run('Saving local project change', async () => {
-    const row = await db.project.getById(project.id);
-    row.status = row.status === 'active' ? 'paused' : 'active';
-    row.updatedAt = new Date();
-    await row.saveChanges();
-    await refreshLocal();
+    project.status = project.status === 'active' ? 'paused' : 'active';
+    project.updatedAt = new Date();
+    await projects.value.saveChanges({});
   });
 }
 
@@ -170,6 +206,7 @@ async function run(message, fn) {
     status.value = 'Idle';
   }
   catch (e) {
+    console.dir(e);
     status.value = e.message || String(e);
   }
   finally {
