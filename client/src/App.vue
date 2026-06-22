@@ -28,6 +28,7 @@ const busy = ref(false);
 const lastSync = ref(null);
 const newTaskTitle = ref('');
 const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:3055';
+let localSchemaResetAttempted = false;
 
 const selectedProject = computed(() =>
   projects.value.find((project) => project.id === selectedProjectId.value) || projects.value[0]
@@ -43,7 +44,7 @@ onMounted(async () => {
     lastSync.value = new Date();
   });
   db.syncClient.on('error', ({ error }) => {
-    status.value = error.message || String(error);
+    void handleSyncError(error);
   });
   await run('Starting auto sync', async () => {
     await db.syncClient.start();
@@ -88,6 +89,24 @@ async function time(label, fn) {
 	}
 }
 
+async function handleSyncError(error) {
+  if (await recoverLocalSyncSchemaMismatch(error))
+    return;
+  status.value = error.message || String(error);
+}
+
+async function recoverLocalSyncSchemaMismatch(error) {
+  if (!isLocalSyncSchemaMismatch(error) || localSchemaResetAttempted)
+    return false;
+  localSchemaResetAttempted = true;
+  await resetLocalDatabase();
+  return true;
+}
+
+function isLocalSyncSchemaMismatch(error) {
+  return /Local sync schema does not match current map/u.test(error && error.message || String(error));
+}
+
 async function pull() {
 	await run('Pulling server changes', async () => {
 		await db.syncClient.pull();
@@ -107,23 +126,44 @@ async function syncBoth() {
   await pull();
 }
 
+async function resetLocalDatabase() {
+  await run('Resetting local database', async () => {
+    db.syncClient.stop();
+    await db.syncClient.resetLocal({ force: true });
+    projects.value = [];
+    people.value = [];
+    selectedProjectId.value = null;
+    await db.syncClient.pull();
+    lastSync.value = new Date();
+    await refreshLocal();
+    await db.syncClient.start();
+    localSchemaResetAttempted = false;
+  });
+}
+
 async function createProject() {
   const owner = people.value[0];
   if (!owner)
     return;
   await run('Creating local project', async () => {
     const stamp = new Date().toLocaleTimeString();
+    const projectId = crypto.randomUUID();
     const project = await db.project.insert({
+      id: projectId,
       ownerId: owner.id,
       title: `Local sync test ${stamp}`,
       status: 'draft',
       updatedAt: new Date(),
       detail: {
+        id: crypto.randomUUID(),
+        projectId,
         summary: 'Created locally. Push sends the patch transaction to Postgres.',
         riskLevel: 'low'
       },
       tasks: [
         {
+          id: crypto.randomUUID(),
+          projectId,
           assigneeId: owner.id,
           title: 'Push this local task',
           done: false,
@@ -169,6 +209,7 @@ async function addTask() {
     return;
   await run('Adding local task', async () => {
     await db.task.insert({
+      id: crypto.randomUUID(),
       projectId: project.id,
       assigneeId: project.ownerId,
       title: newTaskTitle.value.trim(),
@@ -177,6 +218,61 @@ async function addTask() {
     });
     newTaskTitle.value = '';
     await refreshLocal();
+  });
+}
+
+async function addServerTaskCommand() {
+  const p = selectedProject.value;
+  if (!p)
+    return;
+  await run('Running server commands', async () => {
+    const stamp = new Date().toLocaleTimeString();
+    await db.transaction(async (tx) => {
+      await tx.commands.addServerTask({
+        projectId: p.id,
+        title: `Server command A ${stamp}`
+      });
+      await tx.commands.addServerTask({
+        projectId: p.id,
+        title: `Server command B ${stamp}`
+      });
+    
+    const projectId = crypto.randomUUID();
+    const owner = people.value[0];
+    await tx.project.insert({
+      id: projectId,
+      ownerId: owner.id,
+      title: `Local sync test ${stamp}`,
+      status: 'draft',
+      updatedAt: new Date(),
+      detail: {
+        id: crypto.randomUUID(),
+        projectId,
+        summary: 'Created locally. Push sends the patch transaction to Postgres.',
+        riskLevel: 'low'
+      },
+      tasks: [
+        {
+          id: crypto.randomUUID(),
+          projectId,
+          assigneeId: owner.id,
+          title: 'Push this local task',
+          done: false,
+          sortOrder: 1
+        }
+      ]
+    });
+
+
+
+    });
+
+
+
+
+    await db.syncClient.push();
+    lastSync.value = new Date();
+    await db.syncClient.pull();
   });
 }
 
@@ -207,6 +303,8 @@ async function run(message, fn) {
   }
   catch (e) {
     console.dir(e);
+    if (await recoverLocalSyncSchemaMismatch(e))
+      return;
     status.value = e.message || String(e);
   }
   finally {
@@ -240,6 +338,7 @@ async function run(message, fn) {
         <button @click="push" :disabled="busy"><span class="icon">U</span> Push</button>
         <button @click="pull" :disabled="busy"><span class="icon">D</span> Pull</button>
         <button @click="createServerChange" :disabled="busy"><span class="icon">S</span> Server edit</button>
+        <button @click="resetLocalDatabase" :disabled="busy"><span class="icon">X</span> Reset local DB</button>
       </div>
     </aside>
 
@@ -271,7 +370,10 @@ async function run(message, fn) {
               <p class="eyebrow">{{ selectedProject.owner?.team?.name || 'Team' }}</p>
               <h3>{{ selectedProject.title }}</h3>
             </div>
-            <button @click="flipStatus" :disabled="busy">Toggle status</button>
+            <div class="detail-actions">
+              <button @click="flipStatus" :disabled="busy">Toggle status</button>
+              <button @click="addServerTaskCommand" :disabled="busy">Server commands</button>
+            </div>
           </div>
 
           <dl class="facts">

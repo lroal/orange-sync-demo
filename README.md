@@ -1,5 +1,3 @@
-
- codex resume 019ea5ea-cbf2-7c81-9834-14e1aedde2e2
 # Orange Sync Demo
 
 Demo for two-way sync with Orange ORM.
@@ -10,9 +8,11 @@ The demo intentionally syncs ORM/patch writes only. Raw SQL is used for database
 
 ```bash
 npm install
-npm run db:up
 npm run dev
 ```
+
+The backend uses a local PGlite database by default, stored in `server/.data/pglite`.
+Set `DATABASE_URL` to use an external Postgres server instead.
 
 Root `npm install` installs both `client` and `server`. You can also install them separately:
 

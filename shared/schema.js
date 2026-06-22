@@ -1,34 +1,41 @@
-import rdb from 'orange-orm';
+/**
+ * @typedef {Object} AddServerTaskArgs
+ * @property {string} projectId
+ * @property {string} title
+ */
 
-export function createDemoMap() {
+/**
+ * @param {typeof import('orange-orm')} rdb
+ */
+export function createDemoMap(rdb) {  
   return rdb.map((x) => ({
     team: x.table('team').map(({ column }) => ({
-      id: column('id').numeric().primary().notNullExceptInsert(),
+      id: column('id').uuid().primary().notNull(),
       name: column('name').string().notNull()
     })),
     person: x.table('person').map(({ column }) => ({
-      id: column('id').numeric().primary().notNullExceptInsert(),
-      teamId: column('teamId').numeric().notNullExceptInsert(),
+      id: column('id').uuid().primary().notNull(),
+      teamId: column('teamId').uuid().notNull(),
       name: column('name').string().notNull(),
       email: column('email').string()
     })),
     project: x.table('project').map(({ column }) => ({
-      id: column('id').numeric().primary().notNullExceptInsert(),
-      ownerId: column('ownerId').numeric().notNullExceptInsert(),
+      id: column('id').uuid().primary().notNull(),
+      ownerId: column('ownerId').uuid().notNull(),
       title: column('title').string().notNull(),
       status: column('status').string().notNull(),
       updatedAt: column('updatedAt').dateWithTimeZone()
     })),
     projectDetail: x.table('project_detail').map(({ column }) => ({
-      id: column('id').numeric().primary().notNullExceptInsert(),
-      projectId: column('projectId').numeric().notNullExceptInsert(),
+      id: column('id').uuid().primary().notNull(),
+      projectId: column('projectId').uuid().notNull(),
       summary: column('summary').string(),
       riskLevel: column('riskLevel').string()
     })),
     task: x.table('task').map(({ column }) => ({
-      id: column('id').numeric().primary().notNullExceptInsert(),
-      projectId: column('projectId').numeric().notNullExceptInsert(),
-      assigneeId: column('assigneeId').numeric(),
+      id: column('id').uuid().primary().notNull(),
+      projectId: column('projectId').uuid().notNull(),
+      assigneeId: column('assigneeId').uuid(),
       title: column('title').string().notNull(),
       done: column('done').boolean(),
       sortOrder: column('sortOrder').numeric()
@@ -61,4 +68,16 @@ export const demoDbOptions = {
       concurrency: 'overwrite'
     }
   }
+};
+
+/**
+ * Shared command contract. The browser sync client records these commands in
+ * the local outbox; the server supplies the real implementation.
+ *
+ * @type {{
+ *   addServerTask(args: AddServerTaskArgs): Promise<void>
+ * }}
+ */
+export const demoCommands = {
+  async addServerTask(_args) {}
 };
