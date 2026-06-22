@@ -5,10 +5,11 @@
  */
 
 /**
- * @param {typeof import('orange-orm')} rdb
+ * @param {unknown} rdb
  */
-export function createDemoMap(rdb) {  
-  return rdb.map((x) => ({
+export function createDemoMap(rdb) {
+  const orange = /** @type {typeof import('orange-orm')} */ (rdb);
+  return orange.map((x) => ({
     team: x.table('team').map(({ column }) => ({
       id: column('id').uuid().primary().notNull(),
       name: column('name').string().notNull()
@@ -62,6 +63,7 @@ export function createDemoMap(rdb) {
   }));
 }
 
+/** @type {{ project: { updatedAt: { concurrency: 'overwrite' } } }} */
 export const demoDbOptions = {
   project: {
     updatedAt: {

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import rdb from 'orange-orm';
-import { createDemoMap, demoDbOptions } from '../../shared/schema.js';
+import { createDemoMap, demoCommands, demoDbOptions } from '../../shared/schema.js';
 
 const require = createRequire(import.meta.url);
 rdb.on('queryComplete', ({ sql, parameters, elapsedMs, error }) => {
@@ -21,7 +21,10 @@ const pgliteDataDir = process.env.PGLITE_DATA_DIR || path.resolve(import.meta.di
 const map = createDemoMap(rdb);
 const db = map({
   db: createDatabase,
-  commands: {
+  commands: demoCommands,
+  ...demoDbOptions
+})({
+  commandHandlers: {
     async addServerTask(db, args) {
       const { projectId, title } = args || {};
       if (typeof projectId !== 'string' || !projectId)
@@ -37,8 +40,7 @@ const db = map({
       });
       return { created: true };
     }
-  },
-  ...demoDbOptions
+  }
 });
 
 const schemaSql = `
