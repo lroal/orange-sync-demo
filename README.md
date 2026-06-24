@@ -8,11 +8,16 @@ The demo intentionally syncs ORM/patch writes only. Raw SQL is used for database
 
 ```bash
 npm install
+DATABASE_URL=postgres://orange:orange@localhost:54329/orange_sync_demo npm run dev
+```
+
+In a devcontainer, open http://localhost:8080 and run:
+
+```bash
 npm run dev
 ```
 
-The backend uses a local PGlite database by default, stored in `server/.data/pglite`.
-Set `DATABASE_URL` to use an external Postgres server instead.
+The backend uses Postgres through `DATABASE_URL`. The devcontainer defines Postgres in Docker Compose and exposes the app through nginx with Brotli/gzip compression on port 8080.
 
 Root `npm install` installs both `client` and `server`. You can also install them separately:
 
@@ -21,9 +26,11 @@ cd client && npm install
 cd ../server && npm install
 ```
 
-Backend: http://localhost:3055
+nginx devcontainer entrypoint: http://localhost:8080
 
-Frontend: http://localhost:5173
+Backend direct: http://localhost:3055
+
+Frontend direct: http://localhost:5173
 
 ## Big Local Database
 

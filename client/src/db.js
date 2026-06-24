@@ -1,7 +1,7 @@
 import rdb from 'orange-orm';
 import { createDemoMap, demoCommands } from '../../shared/schema.js';
 
-const syncUrl = import.meta.env.VITE_SYNC_URL || 'http://localhost:3055/rdb';
+const syncUrl = import.meta.env.VITE_SYNC_URL || '/rdb';
 export const localDbName = import.meta.env.VITE_SQLITE_DB_NAME || 'orange-sync-demo_vfs2.sqlite3';
 export const bigMode = import.meta.env.VITE_BIG_MODE === '1' || localDbName.includes('big');
 const sqliteOpfsVfs = import.meta.env.VITE_SQLITE_OPFS_VFS === 'opfs'

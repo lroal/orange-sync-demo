@@ -1,7 +1,6 @@
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import express from 'express';
-import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -23,7 +22,10 @@ const require = createRequire(import.meta.url);
 const orangeOrmMain = require.resolve('orange-orm');
 const { setupChangeTracking } = require(path.join(path.dirname(orangeOrmMain), 'sync/setupChangeTracking.js'));
 const port = Number(process.env.PORT || 3055);
-const pgliteDataDir = process.env.PGLITE_DATA_DIR || path.resolve(import.meta.dirname, '../.data/pglite');
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl)
+  throw new Error('DATABASE_URL is required. Use the devcontainer Postgres service or set DATABASE_URL to a Postgres connection string.');
 
 function truncateLogValue(value, maxLength) {
   if (typeof value !== 'string')
@@ -177,11 +179,7 @@ app.listen(port, () => {
 });
 
 function createDatabase(con) {
-  if (process.env.DATABASE_URL)
-    return con.pg(process.env.DATABASE_URL, { size: 4 });
-
-  fs.mkdirSync(path.dirname(pgliteDataDir), { recursive: true });
-  return con.pglite(pgliteDataDir, { size: 4 });
+  return con.pg(databaseUrl, { size: 4 });
 }
 
 async function initDatabase() {

@@ -7,7 +7,6 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.3.16",
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "express": "^4.19.2",

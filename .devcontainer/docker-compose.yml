@@ -1,0 +1,42 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/javascript-node:1-24-bookworm
+    command: sleep infinity
+    working_dir: /workspaces/orange-sync-demo
+    environment:
+      DATABASE_URL: postgres://orange:orange@postgres:5432/orange_sync_demo
+      VITE_SYNC_URL: /rdb
+    volumes:
+      - ..:/workspaces/orange-sync-demo:cached
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: orange_sync_demo
+      POSTGRES_USER: orange
+      POSTGRES_PASSWORD: orange
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orange -d orange_sync_demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  nginx:
+    build:
+      context: ./nginx
+    ports:
+      - "8080:8080"
+    depends_on:
+      - app
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres_data:

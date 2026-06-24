@@ -1,0 +1,31 @@
+{
+  "name": "Orange Sync Demo",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/orange-sync-demo",
+  "forwardPorts": [8080, 3055, 5173, 5432],
+  "portsAttributes": {
+    "8080": {
+      "label": "nginx",
+      "onAutoForward": "openBrowser"
+    },
+    "3055": {
+      "label": "backend"
+    },
+    "5173": {
+      "label": "vite"
+    },
+    "5432": {
+      "label": "postgres"
+    }
+  },
+  "postCreateCommand": "npm install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "Vue.volar"
+      ]
+    }
+  }
+}

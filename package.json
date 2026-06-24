@@ -5,6 +5,7 @@
   "scripts": {
     "postinstall": "node scripts/install.mjs",
     "dev": "node scripts/dev.mjs",
+    "dev:container": "DATABASE_URL=${DATABASE_URL:-postgres://orange:orange@postgres:5432/orange_sync_demo} node scripts/dev.mjs",
     "dev:opfs": "node scripts/dev.mjs --opfs",
     "dev:big": "node scripts/dev.mjs --big",
     "dev:server": "npm run dev --prefix server",
@@ -15,7 +16,6 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.3.16",
     "orange-orm": "github:alfateam/orange-orm#sync",
     "pg": "^8.21.0"
   }
