@@ -1,6 +1,8 @@
 services:
   app:
-    image: mcr.microsoft.com/devcontainers/javascript-node:24-bookworm
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: sleep infinity
     working_dir: /workspaces/orange-sync-demo
     environment:
