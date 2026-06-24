@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 const useSahPool = !process.argv.includes('--opfs');
+const useBigDb = process.argv.includes('--big');
 
 const commands = [
   ['server', ['run', 'dev', '--prefix', 'server']],
@@ -55,14 +56,25 @@ function writePrefixed(name, chunk) {
 }
 
 function getClientEnv() {
+  const modeEnv = useBigDb
+    ? {
+        VITE_BIG_MODE: '1',
+        VITE_SQLITE_DB_NAME: process.env.VITE_SQLITE_DB_NAME || 'orange-sync-demo-big2.sqlite3',
+        VITE_BIG_PROJECTS: process.env.VITE_BIG_PROJECTS || '5000',
+        VITE_BIG_TASKS_PER_PROJECT: process.env.VITE_BIG_TASKS_PER_PROJECT || '3'
+      }
+    : {};
+
   if (!useSahPool) {
     return {
+      ...modeEnv,
       VITE_SQLITE_OPFS_VFS: '',
       VITE_SQLITE_OPFS_SAH_FALLBACK: ''
     };
   }
 
   return {
+    ...modeEnv,
     VITE_SQLITE_OPFS_VFS: process.env.VITE_SQLITE_OPFS_VFS || 'opfs-sahpool',
     VITE_SQLITE_OPFS_SAH_FALLBACK: process.env.VITE_SQLITE_OPFS_SAH_FALLBACK || '1'
   };

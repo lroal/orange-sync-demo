@@ -25,6 +25,30 @@ Backend: http://localhost:3055
 
 Frontend: http://localhost:5173
 
+## Big Local Database
+
+Use a separate browser OPFS database for local performance testing:
+
+```bash
+npm run dev:big
+```
+
+This uses `orange-sync-demo-big2.sqlite3`. In the UI, click `Seed local big DB` to reset that local database, create demo sync schema, and insert synthetic local data. Defaults are 5,000 projects and 3 tasks per project. Override them with:
+
+```bash
+VITE_BIG_PROJECTS=20000 VITE_BIG_TASKS_PER_PROJECT=5 npm run dev:big
+```
+
+The project list is paged so the UI only reads one page from local SQLite at a time.
+
+To test sync transfer performance, choose a profile and click `Seed server + pull`. This resets the server demo tables, creates synthetic server-side rows, resets the local big database, and performs a real pull through `/rdb?sync=pull`.
+
+- `Many`: 50,000 projects, 150,000 tasks, short summaries
+- `Wide`: 10,000 projects, 20,000 tasks, 8 KB summaries
+- `Mixed`: 25,000 projects, 125,000 tasks, 1 KB summaries
+
+Use browser network throttling to simulate low bandwidth; the demo does not add artificial server delay or change sync batch sizes for these profiles.
+
 ## Model
 
 Relations included:

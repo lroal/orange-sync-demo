@@ -106,6 +106,25 @@ button:disabled {
   gap: 10px;
 }
 
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.segmented button {
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.segmented button.active {
+  border-color: #1f6f50;
+  background: #dceadf;
+}
+
 .actions button,
 .primary,
 .detail-head button,
@@ -159,6 +178,26 @@ button:disabled {
   display: grid;
   align-content: start;
   gap: 10px;
+}
+
+.pager {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 8px;
+}
+
+.pager button {
+  min-height: 34px;
+  border-radius: 8px;
+}
+
+.pager span {
+  min-width: 0;
+  color: #647068;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .project-list button {

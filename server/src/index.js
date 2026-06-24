@@ -9,14 +9,29 @@ import rdb from 'orange-orm';
 import { createDemoMap, demoCommands, demoDbOptions } from '../../shared/schema.js';
 
 const require = createRequire(import.meta.url);
-rdb.on('queryComplete', ({ sql, parameters, elapsedMs, error }) => {
-  console.dir({ sql, parameters, elapsedMs, error });
-});
+// rdb.on('queryComplete', ({ sql, parameters, elapsedMs, error }) => {
+//   console.dir({
+//     sql: truncateLogValue(sql, 800),
+//     parameters: Array.isArray(parameters)
+//       ? parameters.map((value) => truncateLogValue(value, 160))
+//       : parameters,
+//     elapsedMs,
+//     error
+//   });
+// });
 
 const orangeOrmMain = require.resolve('orange-orm');
 const { setupChangeTracking } = require(path.join(path.dirname(orangeOrmMain), 'sync/setupChangeTracking.js'));
 const port = Number(process.env.PORT || 3055);
 const pgliteDataDir = process.env.PGLITE_DATA_DIR || path.resolve(import.meta.dirname, '../.data/pglite');
+
+function truncateLogValue(value, maxLength) {
+  if (typeof value !== 'string')
+    return value;
+  if (value.length <= maxLength)
+    return value;
+  return `${value.slice(0, maxLength)}... <${value.length} chars>`;
+}
 
 const map = createDemoMap(rdb);
 const db = map({
@@ -128,13 +143,24 @@ app.post('/api/seed-server-change', async (_req, res, next) => {
   }
 });
 
+app.post('/api/seed-big-server', async (req, res, next) => {
+  try {
+    const options = normalizeBigSeedOptions(req.body || {});
+    const result = await seedBigServerDatabase(options);
+    res.json(result);
+  }
+  catch (e) {
+    next(e);
+  }
+});
+
 app.use('/rdb', db.express({
   sync: {
-    queue: { concurrency: 1, maxPending: 100 },
+    queue: { concurrency: 10, maxPending: 100 },
     limits: {
       maxTablesPerRequest: 20,
-      maxKeysPerBatch: 50,
-      maxRowsPerBatch: 50,
+      maxKeysPerBatch: 1000,
+      maxRowsPerBatch: 200,
       maxChangeWindow: 500
     }
   }
@@ -155,7 +181,7 @@ function createDatabase(con) {
     return con.pg(process.env.DATABASE_URL, { size: 4 });
 
   fs.mkdirSync(path.dirname(pgliteDataDir), { recursive: true });
-  return con.pglite(pgliteDataDir, { size: 1 });
+  return con.pglite(pgliteDataDir, { size: 4 });
 }
 
 async function initDatabase() {
@@ -246,6 +272,155 @@ async function seedIfEmpty() {
       { id: ids.opfsTaskVerify, projectId: ids.opfsProject, assigneeId: grace.id, title: 'Verify worker-backed SQLite', done: false, sortOrder: 1 }
     ]
   });
+}
+
+async function seedBigServerDatabase(options) {
+  const startedAt = performance.now();
+  await runStatements(db, `
+    truncate table task, project_detail, project, person, team restart identity cascade;
+    delete from orange_changes;
+    delete from orange_sync_applied_mutations;
+  `);
+
+  const { projectCount, tasksPerProject, profile, summaryBytes } = options;
+  const teamCount = Math.min(100, Math.max(20, Math.ceil(projectCount / 1000)));
+  const personCount = Math.min(5000, Math.max(200, Math.ceil(projectCount / 25)));
+  await insertValues('team', ['id', 'name'], Array.from({ length: teamCount }, (_, index) => [
+    bigId('team', index),
+    `Big team ${index + 1}`
+  ]));
+  await insertValues('person', ['id', 'teamId', 'name', 'email'], Array.from({ length: personCount }, (_, index) => [
+    bigId('person', index),
+    bigId('team', index % teamCount),
+    `Big person ${index + 1}`,
+    `big.person.${index + 1}@example.test`
+  ]));
+
+  for (let offset = 0; offset < projectCount; offset += 500) {
+    const size = Math.min(500, projectCount - offset);
+    await insertValues('project', ['id', 'ownerId', 'title', 'status', 'updatedAt'], Array.from({ length: size }, (_, localIndex) => {
+      const index = offset + localIndex;
+      return [
+        bigId('project', index),
+        bigId('person', index % personCount),
+        `${profileLabel(profile)} project ${index + 1}`,
+        index % 3 === 0 ? 'active' : index % 3 === 1 ? 'planning' : 'paused',
+        new Date(Date.UTC(2026, 0, 1 + (index % 28), 9, index % 60, 0))
+      ];
+    }));
+    await insertValues('project_detail', ['id', 'projectId', 'summary', 'riskLevel'], Array.from({ length: size }, (_, localIndex) => {
+      const index = offset + localIndex;
+      return [
+        bigId('detail', index),
+        bigId('project', index),
+        makeSummary(index, summaryBytes),
+        index % 4 === 0 ? 'high' : index % 4 === 1 ? 'medium' : 'low'
+      ];
+    }));
+    const taskRows = [];
+    for (let localIndex = 0; localIndex < size; localIndex++) {
+      const projectIndex = offset + localIndex;
+      for (let taskIndex = 0; taskIndex < tasksPerProject; taskIndex++) {
+        taskRows.push([
+          bigId('task', projectIndex * Math.max(1, tasksPerProject) + taskIndex),
+          bigId('project', projectIndex),
+          bigId('person', (projectIndex + taskIndex) % personCount),
+          `${profileLabel(profile)} task ${taskIndex + 1} for project ${projectIndex + 1}`,
+          taskIndex % 2 === 0,
+          taskIndex + 1
+        ]);
+      }
+    }
+    await insertValues('task', ['id', 'projectId', 'assigneeId', 'title', 'done', 'sortOrder'], taskRows);
+  }
+
+  return {
+    ok: true,
+    profile,
+    projects: projectCount,
+    tasks: projectCount * tasksPerProject,
+    people: personCount,
+    teams: teamCount,
+    summaryBytes,
+    elapsedMs: Math.round(performance.now() - startedAt)
+  };
+}
+
+function normalizeBigSeedOptions(input) {
+  const profile = typeof input.profile === 'string' ? input.profile : 'many';
+  const defaults = {
+    many: { projectCount: 50000, tasksPerProject: 3, summaryBytes: 160 },
+    wide: { projectCount: 10000, tasksPerProject: 2, summaryBytes: 8192 },
+    mixed: { projectCount: 25000, tasksPerProject: 5, summaryBytes: 1024 }
+  };
+  const selected = defaults[profile] || defaults.many;
+  return {
+    profile: defaults[profile] ? profile : 'many',
+    projectCount: clampInteger(input.projectCount, selected.projectCount, 1, 250000),
+    tasksPerProject: clampInteger(input.tasksPerProject, selected.tasksPerProject, 0, 50),
+    summaryBytes: clampInteger(input.summaryBytes, selected.summaryBytes, 0, 65536)
+  };
+}
+
+async function insertValues(table, columns, rows) {
+  if (rows.length === 0)
+    return;
+  const chunkSize = 500;
+  const columnSql = columns.map(quoteIdent).join(',');
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    const chunk = rows.slice(offset, offset + chunkSize);
+    const parameters = [];
+    const valuesSql = chunk
+      .map((row) => {
+        for (const value of row)
+          parameters.push(value instanceof Date ? value.toISOString() : value);
+        return `(${row.map(() => '?').join(',')})`;
+      })
+      .join(',');
+    await db.query({
+      sql: `insert into ${quoteIdent(table)} (${columnSql}) values ${valuesSql} on conflict do nothing`,
+      parameters
+    });
+  }
+}
+
+function bigId(kind, index) {
+  const prefixes = {
+    team: '10000000',
+    person: '20000000',
+    project: '30000000',
+    detail: '40000000',
+    task: '50000000'
+  };
+  const prefix = prefixes[kind] || '90000000';
+  const value = index.toString(16).padStart(12, '0');
+  return `${prefix}-0000-4000-8000-${value}`;
+}
+
+function makeSummary(index, targetBytes) {
+  const base = `Synthetic server-side summary for row ${index + 1}. `;
+  if (targetBytes <= base.length)
+    return base.slice(0, targetBytes);
+  const filler = `payload-${String(index + 1).padStart(8, '0')}-`;
+  let result = base;
+  while (result.length < targetBytes)
+    result += filler;
+  return result.slice(0, targetBytes);
+}
+
+function profileLabel(profile) {
+  return profile === 'wide' ? 'Wide' : profile === 'mixed' ? 'Mixed' : 'Many';
+}
+
+function clampInteger(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed))
+    return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function quoteIdent(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
 }
 
 async function runStatements(targetDb, sql) {
