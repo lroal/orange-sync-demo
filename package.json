@@ -8,6 +8,7 @@
     "dev:container": "DATABASE_URL=${DATABASE_URL:-postgres://orange:orange@postgres:5432/orange_sync_demo} node scripts/dev.mjs",
     "dev:opfs": "node scripts/dev.mjs --opfs",
     "dev:big": "node scripts/dev.mjs --big",
+    "dev:big:opfs": "node scripts/dev.mjs --big --opfs",
     "dev:server": "npm run dev --prefix server",
     "dev:client": "npm run dev --prefix client",
     "build:client": "npm run build --prefix client",

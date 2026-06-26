@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, shallowRef } from 'vue';
-import { bigMode, db, localDbName } from './db.js';
+import { bigMode, db, localDbName, rotateLocalDbNameForRecovery, syncOperationTimeoutMs } from './db.js';
 import rdb from 'orange-orm';
 db.reactive(reactive);
 
@@ -35,6 +35,7 @@ const bigProjectCount = parsePositiveInteger(import.meta.env.VITE_BIG_PROJECTS, 
 const bigTasksPerProject = parsePositiveInteger(import.meta.env.VITE_BIG_TASKS_PER_PROJECT, 3);
 const serverBigProfile = ref(import.meta.env.VITE_BIG_SERVER_PROFILE || 'many');
 let localSchemaResetAttempted = false;
+const sqliteCorruptionRecoveryKey = 'orange-sync-demo.sqliteCorruptionRecoveryAttempted';
 
 const selectedProject = computed(() =>
   projects.value.find((project) => project.id === selectedProjectId.value) || projects.value[0]
@@ -62,6 +63,7 @@ onMounted(async () => {
   });
   await run('Starting auto sync', async () => {
     await db.syncClient.start();
+    sessionStorage.removeItem(sqliteCorruptionRecoveryKey);
   });
 });
 
@@ -128,6 +130,8 @@ async function time(label, fn) {
 async function handleSyncError(error) {
   if (await recoverLocalSyncSchemaMismatch(error))
     return;
+  if (recoverLocalSqliteCorruption(error))
+    return;
   status.value = error.message || String(error);
 }
 
@@ -141,6 +145,31 @@ async function recoverLocalSyncSchemaMismatch(error) {
 
 function isLocalSyncSchemaMismatch(error) {
   return /Local sync schema does not match current map/u.test(error && error.message || String(error));
+}
+
+function recoverLocalSqliteCorruption(error) {
+  if (!isLocalSqliteCorruption(error))
+    return false;
+
+  if (sessionStorage.getItem(sqliteCorruptionRecoveryKey)) {
+    status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
+    return true;
+  }
+
+  const nextDbName = rotateLocalDbNameForRecovery();
+  if (!nextDbName) {
+    status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
+    return true;
+  }
+
+  sessionStorage.setItem(sqliteCorruptionRecoveryKey, '1');
+  status.value = 'Local SQLite database is corrupt. Switching to ' + nextDbName + ' and reloading.';
+  setTimeout(() => window.location.reload(), 250);
+  return true;
+}
+
+function isLocalSqliteCorruption(error) {
+  return /SQLITE_CORRUPT|database disk image is malformed/u.test(error && error.message || String(error));
 }
 
 async function pull() {
@@ -184,8 +213,8 @@ async function nextProjectPage() {
 
 async function seedBigLocalDatabase() {
   await run(`Seeding ${bigProjectCount.toLocaleString()} local projects`, async () => {
-    db.syncClient.stop();
-    await db.syncClient.resetLocal({ force: true });
+    await stopSyncClient();
+    await syncOperation('seed local reset', () => db.syncClient.resetLocal({ force: true }));
     projects.value = [];
     people.value = [];
     selectedProjectId.value = null;
@@ -210,8 +239,8 @@ async function seedBigServerDatabase() {
       throw new Error(`Server big seed failed with status ${response.status}`);
     const result = await response.json();
     console.info('[timing] seedBigServerDatabase', result);
-    db.syncClient.stop();
-    await db.syncClient.resetLocal({ force: true });
+    await stopSyncClient();
+    await syncOperation('seed server reset', () => db.syncClient.resetLocal({ force: true }));
     projects.value = [];
     people.value = [];
     selectedProjectId.value = null;
@@ -333,8 +362,8 @@ function sqlValue(value) {
 
 async function resetLocalDatabase() {
   await run('Resetting local database', async () => {
-    db.syncClient.stop();
-    await db.syncClient.resetLocal({ force: true });
+    await stopSyncClient();
+    await syncOperation('reset local database', () => db.syncClient.resetLocal({ force: true }));
     projects.value = [];
     people.value = [];
     selectedProjectId.value = null;
@@ -502,11 +531,31 @@ async function createServerChange() {
 async function pullWithTiming(label) {
   const startedAt = performance.now();
   try {
-    return await db.syncClient.pull();
+    return await syncOperation(label, () => db.syncClient.pull({ timeoutMs: syncOperationTimeoutMs }));
   }
   finally {
     console.info(`[timing] ${label} took ${(performance.now() - startedAt).toFixed(1)} ms`);
   }
+}
+
+async function syncOperation(label, fn) {
+  return await withTimeout(fn(), syncOperationTimeoutMs, label);
+}
+
+async function stopSyncClient() {
+  if (typeof db.syncClient.stop === 'function')
+    await db.syncClient.stop();
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} did not finish within ${Math.round(timeoutMs / 1000)} seconds. Check the browser console for the last [sync-fetch] or [sync-sqlite] line; sqliteOPFS may be blocked by a stuck worker/tab.`));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout])
+    .finally(() => clearTimeout(timeoutId));
 }
 
 async function run(message, fn) {
@@ -519,6 +568,8 @@ async function run(message, fn) {
   catch (e) {
     console.dir(e);
     if (await recoverLocalSyncSchemaMismatch(e))
+      return;
+    if (recoverLocalSqliteCorruption(e))
       return;
     status.value = e.message || String(e);
   }

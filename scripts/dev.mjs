@@ -68,7 +68,7 @@ function getClientEnv() {
   if (!useSahPool) {
     return {
       ...modeEnv,
-      VITE_SQLITE_OPFS_VFS: '',
+      VITE_SQLITE_OPFS_VFS: 'opfs',
       VITE_SQLITE_OPFS_SAH_FALLBACK: ''
     };
   }

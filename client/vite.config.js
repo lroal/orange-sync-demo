@@ -3,13 +3,9 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [vue()],
-  resolve: {
-    alias: {
-      '@electric-sql/pglite': '/src/pglite-stub.js'
-    }
-  },
   server: {
     port: 5173,
+    allowedHosts: ['vite'],
     fs: {
       allow: ['..']
     },

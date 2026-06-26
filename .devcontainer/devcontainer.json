@@ -19,7 +19,7 @@
       "label": "postgres"
     }
   },
-  "postCreateCommand": "npm ci",
+  "postCreateCommand": "npm ci && npm i @openai/codex -g",
   "customizations": {
     "vscode": {
       "extensions": [

@@ -7,6 +7,9 @@ import path from 'node:path';
 import rdb from 'orange-orm';
 import { createDemoMap, demoCommands, demoDbOptions } from '../../shared/schema.js';
 
+if (process.env.ORANGE_QUERY_LOG === '1')
+  rdb.on('query', console.dir);
+
 const require = createRequire(import.meta.url);
 // rdb.on('queryComplete', ({ sql, parameters, elapsedMs, error }) => {
 //   console.dir({
@@ -156,13 +159,14 @@ app.post('/api/seed-big-server', async (req, res, next) => {
   }
 });
 
+app.use('/rdb', logSyncTiming);
 app.use('/rdb', db.express({
   sync: {
     queue: { concurrency: 10, maxPending: 100 },
     limits: {
       maxTablesPerRequest: 20,
       maxKeysPerBatch: 1000,
-      maxRowsPerBatch: 200,
+      maxRowsPerBatch: 500,
       maxChangeWindow: 500
     }
   }
@@ -174,12 +178,49 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Orange sync demo backend listening on http://localhost:${port}`);
+const server = app.listen(port, () => {
+  console.log("Orange sync demo backend listening on http://localhost:" + port);
+});
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error("Port " + port + " is already in use. Stop the existing dev server or set PORT to another value.");
+    process.exit(1);
+  }
+
+  throw err;
 });
 
 function createDatabase(con) {
   return con.pg(databaseUrl, { size: 4 });
+}
+
+function logSyncTiming(req, res, next) {
+  const startedAt = process.hrtime.bigint();
+  const body = req.body || {};
+  const phase = body.phase || body.action || 'api';
+  const itemCount = Array.isArray(body.items)
+    ? body.items.length
+    : Array.isArray(body.mutations)
+      ? body.mutations.length
+      : 0;
+  const tableCount = Array.isArray(body.tables) ? body.tables.length : 0;
+
+  res.on('finish', () => {
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const parts = [
+      `[sync] ${phase}`,
+      `${res.statusCode}`,
+      `${elapsedMs.toFixed(1)} ms`
+    ];
+    if (itemCount)
+      parts.push(`items=${itemCount}`);
+    if (tableCount)
+      parts.push(`tables=${tableCount}`);
+    console.info(parts.join(' '));
+  });
+
+  next();
 }
 
 async function initDatabase() {
