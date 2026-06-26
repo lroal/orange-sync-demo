@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, shallowRef } from 'vue';
-import { bigMode, db, localDbName, rotateLocalDbNameForRecovery, syncOperationTimeoutMs } from './db.js';
+import { bigMode, db, localDbName, rotateLocalDbNameForRecovery, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
 import rdb from 'orange-orm';
 db.reactive(reactive);
 
@@ -172,23 +172,12 @@ function isLocalSqliteCorruption(error) {
   return /SQLITE_CORRUPT|database disk image is malformed/u.test(error && error.message || String(error));
 }
 
-async function pull() {
-	await run('Pulling server changes', async () => {
-		await pullWithTiming('manual pull');
-  });
-}
-
-async function push() {
-  await run('Pushing local changes', async () => {
-    await db.syncClient.push();
+async function syncNow() {
+  await run('Syncing changes', async () => {
+    await syncWithTiming('manual sync');
     lastSync.value = new Date();
     await refreshLocal();
   });
-}
-
-async function syncBoth() {
-  await push();
-  await pull();
 }
 
 async function reloadLocal() {
@@ -219,9 +208,9 @@ async function seedBigLocalDatabase() {
     people.value = [];
     selectedProjectId.value = null;
     projectPage.value = 0;
-    await pullWithTiming('seed local schema pull');
+    await syncWithTiming('seed local schema sync');
     await seedBigRows(bigProjectCount, bigTasksPerProject);
-    await pullWithTiming('seed local base pull');
+    await syncWithTiming('seed local base sync');
     lastSync.value = new Date();
     await refreshLocal();
     await db.syncClient.start();
@@ -245,7 +234,7 @@ async function seedBigServerDatabase() {
     people.value = [];
     selectedProjectId.value = null;
     projectPage.value = 0;
-    await pullWithTiming('seed server pull');
+    await syncWithTiming('seed server sync');
     lastSync.value = new Date();
     await refreshLocal();
     await db.syncClient.start();
@@ -367,7 +356,7 @@ async function resetLocalDatabase() {
     projects.value = [];
     people.value = [];
     selectedProjectId.value = null;
-    await pullWithTiming('reset local pull');
+    await syncWithTiming('reset local sync');
     lastSync.value = new Date();
     await refreshLocal();
     await db.syncClient.start();
@@ -504,9 +493,8 @@ async function addServerTaskCommand() {
 
 
 
-    await db.syncClient.push();
     lastSync.value = new Date();
-    await pullWithTiming('server command pull');
+    await syncWithTiming('server command sync');
   });
 }
 
@@ -524,14 +512,14 @@ async function flipStatus() {
 async function createServerChange() {
   await run('Creating server-side change', async () => {
     await fetch(`${serverUrl}/api/seed-server-change`, { method: 'POST' });
-    await pull();
+    await syncWithTiming('server change sync');
   });
 }
 
-async function pullWithTiming(label) {
+async function syncWithTiming(label) {
   const startedAt = performance.now();
   try {
-    return await syncOperation(label, () => db.syncClient.pull({ timeoutMs: syncOperationTimeoutMs }));
+    return await syncOperation(label, () => db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs }));
   }
   finally {
     console.info(`[timing] ${label} took ${(performance.now() - startedAt).toFixed(1)} ms`);
@@ -539,7 +527,7 @@ async function pullWithTiming(label) {
 }
 
 async function syncOperation(label, fn) {
-  return await withTimeout(fn(), syncOperationTimeoutMs, label);
+  return await withTimeout(traceSyncOperation(fn), syncOperationTimeoutMs, label);
 }
 
 async function stopSyncClient() {
@@ -596,14 +584,12 @@ async function run(message, fn) {
           <span>{{ status }}</span>
         </div>
         <p v-if="lastSync">Last sync {{ lastSync.toLocaleTimeString() }}</p>
-        <p v-else>Waiting for first pull</p>
+        <p v-else>Waiting for first sync</p>
         <p>{{ localDbName }}</p>
       </section>
 
       <div class="actions">
-        <button @click="syncBoth" :disabled="busy"><span class="icon">R</span> Sync</button>
-        <button @click="push" :disabled="busy"><span class="icon">U</span> Push</button>
-        <button @click="pull" :disabled="busy"><span class="icon">D</span> Pull</button>
+        <button @click="syncNow" :disabled="busy"><span class="icon">R</span> Sync</button>
         <button @click="reloadLocal" :disabled="busy"><span class="icon">L</span> Refresh UI</button>
         <button v-if="bigMode" @click="seedBigLocalDatabase" :disabled="busy"><span class="icon">B</span> Seed local big DB</button>
         <div v-if="bigMode" class="segmented">

@@ -18,6 +18,7 @@ const sqliteOpfsSahPool = sqliteOpfsVfs === 'opfs-sahpool'
     }
   : undefined;
 const map = createDemoMap(rdb);
+let activeSyncOperations = 0;
 
 export function rotateLocalDbNameForRecovery() {
   if (typeof localStorage === 'undefined')
@@ -26,6 +27,16 @@ export function rotateLocalDbNameForRecovery() {
   const nextName = addRecoverySuffix(configuredLocalDbName);
   localStorage.setItem(localDbNameOverrideKey, nextName);
   return nextName;
+}
+
+export async function traceSyncOperation(fn) {
+  activeSyncOperations += 1;
+  try {
+    return await fn();
+  }
+  finally {
+    activeSyncOperations = Math.max(0, activeSyncOperations - 1);
+  }
 }
 
 function readLocalDbNameOverride() {
@@ -109,24 +120,31 @@ function installSyncTimingProbe() {
       throw error;
     }
     finally {
-      if (isSyncRequest && phase === 'keys' && body && body.token === null)
+      if (isSyncRequest && phase === 'keys')
         activePulls = Math.max(0, activePulls - 1);
     }
   };
 
-  rdb.on('queryComplete', ({ sql, elapsedMs, workerElapsedMs, error }) => {
-    if (activePulls <= 0)
+  rdb.on('query', ({ sql, lane, readonly }) => {
+    if (!shouldTraceSyncSql(activePulls))
       return;
-    const compactSql = typeof sql === 'string'
-      ? sql.replace(/\s+/g, ' ').trim().slice(0, 140)
-      : '';
+    const compactSql = compactSqlText(sql);
+    if (!shouldLogSyncSqlStart(compactSql))
+      return;
+    console.info('[sync-sqlite] start' + lanePart(lane, readonly) + ' sql=' + compactSql);
+  });
+
+  rdb.on('queryComplete', ({ sql, elapsedMs, workerElapsedMs, error, lane, readonly }) => {
+    if (!shouldTraceSyncSql(activePulls))
+      return;
+    const compactSql = compactSqlText(sql);
     if (!shouldLogSyncSql(compactSql, error))
       return;
     const workerPart = typeof workerElapsedMs === 'number'
       ? ' worker=' + workerElapsedMs.toFixed(1) + ' ms'
       : '';
     const errorPart = error ? ' error=' + (error.message || String(error)) : '';
-    console.info('[sync-sqlite] elapsed=' + Number(elapsedMs || 0).toFixed(1) + ' ms' + workerPart + errorPart + ' sql=' + compactSql);
+    console.info('[sync-sqlite] elapsed=' + Number(elapsedMs || 0).toFixed(1) + ' ms' + workerPart + lanePart(lane, readonly) + errorPart + ' sql=' + compactSql);
   });
 }
 
@@ -155,4 +173,28 @@ function shouldLogSyncSql(sql, error) {
   if (!sql)
     return false;
   return /^(INSERT|UPDATE|DELETE|REPLACE|COMMIT|BEGIN|ROLLBACK|PRAGMA foreign_key_check|PRAGMA defer_foreign_keys)/iu.test(sql);
+}
+
+function shouldTraceSyncSql(activePulls) {
+  return activePulls > 0 || activeSyncOperations > 0;
+}
+
+function shouldLogSyncSqlStart(sql) {
+  return /^(SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|COMMIT|BEGIN|ROLLBACK|PRAGMA)/iu.test(sql);
+}
+
+function compactSqlText(sql) {
+  return typeof sql === 'string'
+    ? sql.replace(/\s+/g, ' ').trim().slice(0, 180)
+    : '';
+}
+
+function lanePart(lane, readonly) {
+  if (lane)
+    return ' lane=' + lane;
+  if (readonly === true)
+    return ' lane=reader';
+  if (readonly === false)
+    return ' lane=writer';
+  return '';
 }
