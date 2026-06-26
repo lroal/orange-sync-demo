@@ -166,8 +166,8 @@ app.use('/rdb', db.express({
     limits: {
       maxTablesPerRequest: 20,
       maxKeysPerBatch: 1000,
-      maxRowsPerBatch: 500,
-      maxChangeWindow: 500
+      maxRowsPerBatch: 1000,
+      maxChangeWindow: 1000
     }
   }
 }));
@@ -214,7 +214,7 @@ function logSyncTiming(req, res, next) {
       `${elapsedMs.toFixed(1)} ms`
     ];
     if (itemCount)
-      parts.push(`items=${itemCount}`);
+      parts.push(`requestItems=${itemCount}`);
     if (tableCount)
       parts.push(`tables=${tableCount}`);
     console.info(parts.join(' '));

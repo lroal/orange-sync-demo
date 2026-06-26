@@ -60,7 +60,7 @@ export const db = map({
       auto: false,
       pull: {
         maxKeysPerBatch: 1000,
-        maxRowsPerBatch: 500
+        maxRowsPerBatch: 1000
       }
       //  {
       //   intervalMs: 8000,
@@ -103,13 +103,13 @@ function installSyncTimingProbe() {
     if (isSyncRequest) {
       if (phase === 'keys')
         activePulls += 1;
-      console.info('[sync-fetch] start phase=' + (phase || 'unknown') + ' items=' + itemCount);
+      console.info('[sync-fetch] start phase=' + (phase || 'unknown') + ' requestItems=' + itemCount);
     }
 
     try {
       const response = await originalFetch(input, init);
       if (isSyncRequest) {
-        console.info('[sync-fetch] response phase=' + (phase || 'unknown') + ' status=' + response.status + ' elapsed=' + (performance.now() - startedAt).toFixed(1) + ' ms items=' + itemCount);
+        console.info('[sync-fetch] response phase=' + (phase || 'unknown') + ' status=' + response.status + ' elapsed=' + (performance.now() - startedAt).toFixed(1) + ' ms requestItems=' + itemCount);
       }
       return response;
     }
