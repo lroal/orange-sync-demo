@@ -31,8 +31,6 @@ const serverUrl = import.meta.env.VITE_SERVER_URL || '';
 const projectPage = ref(0);
 const projectPageSize = ref(parsePositiveInteger(import.meta.env.VITE_PROJECT_PAGE_SIZE, 25));
 const projectTotal = ref(0);
-const bigProjectCount = parsePositiveInteger(import.meta.env.VITE_BIG_PROJECTS, 5000);
-const bigTasksPerProject = parsePositiveInteger(import.meta.env.VITE_BIG_TASKS_PER_PROJECT, 3);
 const serverBigProfile = ref(import.meta.env.VITE_BIG_SERVER_PROFILE || 'many');
 let localSchemaResetAttempted = false;
 const sqliteCorruptionRecoveryKey = 'orange-sync-demo.sqliteCorruptionRecoveryAttempted';
@@ -139,7 +137,13 @@ async function recoverLocalSyncSchemaMismatch(error) {
   if (!isLocalSyncSchemaMismatch(error) || localSchemaResetAttempted)
     return false;
   localSchemaResetAttempted = true;
-  await resetLocalDatabase();
+  await run('Recovering local sync schema', async () => {
+    await resetAndBootstrapFromServer({
+      resetLabel: 'schema recovery local reset',
+      syncLabel: 'schema recovery bootstrap sync'
+    });
+    localSchemaResetAttempted = false;
+  });
   return true;
 }
 
@@ -200,25 +204,8 @@ async function nextProjectPage() {
   await reloadLocal();
 }
 
-async function seedBigLocalDatabase() {
-  await run(`Seeding ${bigProjectCount.toLocaleString()} local projects`, async () => {
-    await stopSyncClient();
-    await syncOperation('seed local reset', () => db.syncClient.resetLocal({ force: true }));
-    projects.value = [];
-    people.value = [];
-    selectedProjectId.value = null;
-    projectPage.value = 0;
-    await syncWithTiming('seed local schema sync');
-    await seedBigRows(bigProjectCount, bigTasksPerProject);
-    await syncWithTiming('seed local base sync');
-    lastSync.value = new Date();
-    await refreshLocal();
-    await db.syncClient.start();
-  });
-}
-
 async function seedBigServerDatabase() {
-  await run(`Seeding ${serverBigProfile.value} server data`, async () => {
+  await run(`Seeding ${serverBigProfile.value} server data and bootstrapping`, async () => {
     const response = await fetch(`${serverUrl}/api/seed-big-server`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -228,16 +215,10 @@ async function seedBigServerDatabase() {
       throw new Error(`Server big seed failed with status ${response.status}`);
     const result = await response.json();
     console.info('[timing] seedBigServerDatabase', result);
-    await stopSyncClient();
-    await syncOperation('seed server reset', () => db.syncClient.resetLocal({ force: true }));
-    projects.value = [];
-    people.value = [];
-    selectedProjectId.value = null;
-    projectPage.value = 0;
-    await syncWithTiming('seed server sync');
-    lastSync.value = new Date();
-    await refreshLocal();
-    await db.syncClient.start();
+    await resetAndBootstrapFromServer({
+      resetLabel: 'seed server local reset',
+      syncLabel: 'seeded server bootstrap sync'
+    });
   });
 }
 
@@ -245,123 +226,41 @@ function setServerBigProfile(profile) {
   serverBigProfile.value = profile;
 }
 
-async function seedBigRows(projectCount, tasksPerProject) {
-  const startedAt = performance.now();
-  const teamCount = 20;
-  const personCount = 200;
-  await db.query('PRAGMA foreign_keys = ON');
-  await db.query('BEGIN');
-  try {
-    await insertValues('team', ['id', 'name'], Array.from({ length: teamCount }, (_, index) => [
-      bigId('team', index),
-      `Big team ${index + 1}`
-    ]));
-    await insertValues('person', ['id', 'teamId', 'name', 'email'], Array.from({ length: personCount }, (_, index) => [
-      bigId('person', index),
-      bigId('team', index % teamCount),
-      `Big person ${index + 1}`,
-      `big.person.${index + 1}@example.test`
-    ]));
-    for (let offset = 0; offset < projectCount; offset += 500) {
-      const size = Math.min(500, projectCount - offset);
-      await insertValues('project', ['id', 'ownerId', 'title', 'status', 'updatedAt'], Array.from({ length: size }, (_, localIndex) => {
-        const index = offset + localIndex;
-        return [
-          bigId('project', index),
-          bigId('person', index % personCount),
-          `Big project ${index + 1}`,
-          index % 3 === 0 ? 'active' : index % 3 === 1 ? 'planning' : 'paused',
-          new Date(2026, 0, 1 + (index % 28), 9, index % 60, 0).toISOString()
-        ];
-      }));
-      await insertValues('project_detail', ['id', 'projectId', 'summary', 'riskLevel'], Array.from({ length: size }, (_, localIndex) => {
-        const index = offset + localIndex;
-        return [
-          bigId('detail', index),
-          bigId('project', index),
-          `Synthetic project detail for performance testing row ${index + 1}.`,
-          index % 4 === 0 ? 'high' : index % 4 === 1 ? 'medium' : 'low'
-        ];
-      }));
-      const taskRows = [];
-      for (let localIndex = 0; localIndex < size; localIndex++) {
-        const projectIndex = offset + localIndex;
-        for (let taskIndex = 0; taskIndex < tasksPerProject; taskIndex++) {
-          taskRows.push([
-            bigId('task', projectIndex * Math.max(1, tasksPerProject) + taskIndex),
-            bigId('project', projectIndex),
-            bigId('person', (projectIndex + taskIndex) % personCount),
-            `Big task ${taskIndex + 1} for project ${projectIndex + 1}`,
-            taskIndex % 2 === 0 ? 0 : 1,
-            taskIndex + 1
-          ]);
-        }
-      }
-      await insertValues('task', ['id', 'projectId', 'assigneeId', 'title', 'done', 'sortOrder'], taskRows);
-    }
-    await db.query('COMMIT');
-  }
-  catch (e) {
-    await db.query('ROLLBACK');
-    throw e;
-  }
-  console.info(`[timing] seedBigRows inserted ${projectCount} projects and ${projectCount * tasksPerProject} tasks in ${(performance.now() - startedAt).toFixed(1)} ms`);
+async function bootstrapSyncFromServer() {
+  await run('Bootstrapping local database from existing server data', async () => {
+    await resetAndBootstrapFromServer({
+      resetLabel: 'bootstrap local reset',
+      syncLabel: 'bootstrap sync'
+    });
+  });
 }
 
-async function insertValues(table, columns, rows) {
-  if (rows.length === 0)
-    return;
-  const chunkSize = 250;
-  const columnSql = columns.map(quoteIdent).join(',');
-  for (let offset = 0; offset < rows.length; offset += chunkSize) {
-    const chunk = rows.slice(offset, offset + chunkSize);
-    const valuesSql = chunk
-      .map((row) => `(${row.map(sqlValue).join(',')})`)
-      .join(',');
-    await db.query(`INSERT OR REPLACE INTO ${quoteIdent(table)} (${columnSql}) VALUES ${valuesSql}`);
-  }
-}
-
-function bigId(kind, index) {
-  const prefixes = {
-    team: '10000000',
-    person: '20000000',
-    project: '30000000',
-    detail: '40000000',
-    task: '50000000'
-  };
-  const prefix = prefixes[kind] || '90000000';
-  const value = index.toString(16).padStart(12, '0');
-  return `${prefix}-0000-4000-8000-${value}`;
-}
-
-function quoteIdent(value) {
-  return `"${String(value).replace(/"/g, '""')}"`;
-}
-
-function sqlValue(value) {
-  if (value === null || value === undefined)
-    return 'NULL';
-  if (typeof value === 'number')
-    return Number.isFinite(value) ? String(value) : 'NULL';
-  if (typeof value === 'boolean')
-    return value ? '1' : '0';
-  return `'${String(value).replace(/'/g, "''")}'`;
+async function resetAndBootstrapFromServer({ resetLabel, syncLabel }) {
+  await stopSyncClient();
+  await syncOperation(resetLabel, () => db.syncClient.resetLocal({ force: true }));
+  clearLocalView();
+  await syncWithTiming(syncLabel);
+  lastSync.value = new Date();
+  await refreshLocal();
+  await db.syncClient.start();
 }
 
 async function resetLocalDatabase() {
-  await run('Resetting local database', async () => {
+  await run('Resetting local database only', async () => {
     await stopSyncClient();
     await syncOperation('reset local database', () => db.syncClient.resetLocal({ force: true }));
-    projects.value = [];
-    people.value = [];
-    selectedProjectId.value = null;
-    await syncWithTiming('reset local sync');
-    lastSync.value = new Date();
-    await refreshLocal();
-    await db.syncClient.start();
+    clearLocalView();
+    lastSync.value = null;
     localSchemaResetAttempted = false;
   });
+}
+
+function clearLocalView() {
+  projects.value = [];
+  people.value = [];
+  selectedProjectId.value = null;
+  projectPage.value = 0;
+  projectTotal.value = 0;
 }
 
 async function createProject() {
@@ -527,7 +426,7 @@ async function syncWithTiming(label) {
 }
 
 async function syncOperation(label, fn) {
-  return await withTimeout(traceSyncOperation(fn), syncOperationTimeoutMs, label);
+  return await withTimeout(traceSyncOperation(label, fn), syncOperationTimeoutMs, label);
 }
 
 async function stopSyncClient() {
@@ -591,15 +490,15 @@ async function run(message, fn) {
       <div class="actions">
         <button @click="syncNow" :disabled="busy"><span class="icon">R</span> Sync</button>
         <button @click="reloadLocal" :disabled="busy"><span class="icon">L</span> Refresh UI</button>
-        <button v-if="bigMode" @click="seedBigLocalDatabase" :disabled="busy"><span class="icon">B</span> Seed local big DB</button>
         <div v-if="bigMode" class="segmented">
           <button :class="{ active: serverBigProfile === 'many' }" @click="setServerBigProfile('many')" :disabled="busy">Many</button>
           <button :class="{ active: serverBigProfile === 'wide' }" @click="setServerBigProfile('wide')" :disabled="busy">Wide</button>
           <button :class="{ active: serverBigProfile === 'mixed' }" @click="setServerBigProfile('mixed')" :disabled="busy">Mixed</button>
         </div>
-        <button v-if="bigMode" @click="seedBigServerDatabase" :disabled="busy"><span class="icon">P</span> Seed server + pull</button>
+        <button v-if="bigMode" @click="seedBigServerDatabase" :disabled="busy"><span class="icon">B</span> Seed server + bootstrap sync</button>
+        <button v-if="bigMode" @click="bootstrapSyncFromServer" :disabled="busy"><span class="icon">P</span> Bootstrap sync</button>
         <button @click="createServerChange" :disabled="busy"><span class="icon">S</span> Server edit</button>
-        <button @click="resetLocalDatabase" :disabled="busy"><span class="icon">X</span> Reset local DB</button>
+        <button @click="resetLocalDatabase" :disabled="busy"><span class="icon">X</span> Reset local only</button>
       </div>
     </aside>
 

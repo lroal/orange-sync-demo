@@ -32,29 +32,27 @@ Backend direct: http://localhost:3055
 
 Frontend direct: http://localhost:5173
 
-## Big Local Database
+## Big Bootstrap Sync
 
-Use a separate browser OPFS database for local performance testing:
+Use a separate browser OPFS database for bootstrap sync performance testing:
 
 ```bash
 npm run dev:big
 ```
 
-This uses `orange-sync-demo-big2.sqlite3`. In the UI, click `Seed local big DB` to reset that local database, create demo sync schema, and insert synthetic local data. Defaults are 5,000 projects and 3 tasks per project. Override them with:
+This uses `orange-sync-demo-big2.sqlite3`. To test sync transfer performance, choose a profile and click `Seed server + bootstrap sync`. This resets the server demo tables, creates synthetic server-side rows, resets the local big database, and performs a real bootstrap pull through `/rdb?sync=pull`.
 
-```bash
-VITE_BIG_PROJECTS=20000 VITE_BIG_TASKS_PER_PROJECT=5 npm run dev:big
-```
-
-The project list is paged so the UI only reads one page from local SQLite at a time.
-
-To test sync transfer performance, choose a profile and click `Seed server + pull`. This resets the server demo tables, creates synthetic server-side rows, resets the local big database, and performs a real pull through `/rdb?sync=pull`.
+To measure a full bootstrap sync without reseeding the server, click `Bootstrap sync`. This resets only the local browser database and pulls the current server rows. `Reset local only` clears the local browser database without starting a sync.
 
 - `Many`: 50,000 projects, 150,000 tasks, short summaries
 - `Wide`: 10,000 projects, 20,000 tasks, 8 KB summaries
 - `Mixed`: 25,000 projects, 125,000 tasks, 1 KB summaries
 
+The project list is paged so the UI only reads one page from local SQLite at a time.
+
 Use browser network throttling to simulate low bandwidth; the demo does not add artificial server delay or change sync batch sizes for these profiles.
+
+Sync timing is logged to the browser console as `[sync-trace]`. In big mode, apply-phase SQL timing is logged as `[sync-apply-sql]`; disable or enable it at runtime with `orangeSyncTrace.setApplySql(false)` / `orangeSyncTrace.setApplySql(true)`, or set `VITE_TRACE_APPLY_SQL=0|1` before starting the demo.
 
 ## Model
 
