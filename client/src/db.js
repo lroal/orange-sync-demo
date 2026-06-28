@@ -65,11 +65,7 @@ export const db = map({
     ...(sqliteOpfsSahPool ? { sahPool: sqliteOpfsSahPool } : {}),
     sync: {
       url: syncUrl,
-      auto: false,
-      pull: {
-        maxKeysPerBatch: 1000,
-        maxRowsPerBatch: 1000
-      }
+      auto: false
       //  {
       //   intervalMs: 8000,
       //   push: true,

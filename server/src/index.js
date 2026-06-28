@@ -162,13 +162,7 @@ app.post('/api/seed-big-server', async (req, res, next) => {
 app.use('/rdb', logSyncTiming);
 app.use('/rdb', db.express({
   sync: {
-    queue: { concurrency: 10, maxPending: 100 },
-    limits: {
-      maxTablesPerRequest: 20,
-      maxKeysPerBatch: 1000,
-      maxRowsPerBatch: 1000,
-      maxChangeWindow: 1000
-    }
+    queue: { concurrency: 10, maxPending: 100 }
   }
 }));
 
