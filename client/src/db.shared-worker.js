@@ -12,6 +12,7 @@ const db = map({
   db: (con) => con.sqliteOPFS(localDbName, {
     busyTimeoutMs,
     inlineWorker: true,
+    vfs: 'opfs-sahpool',
     sync: {
       url: syncUrl,
       auto: false
