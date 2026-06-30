@@ -1,8 +1,7 @@
 import rdb from 'orange-orm';
 import { createDemoMap, demoCommands } from '../../shared/schema.js';
 
-const backendUrl = 'http://' + globalThis.location.hostname + ':8080';
-const syncUrl = backendUrl + '/rdb';
+const syncUrl = import.meta.env.VITE_SYNC_URL || '/rdb';
 const localDbNameOverrideKey = 'orange-sync-demo.localDbNameOverride';
 const configuredLocalDbName = import.meta.env.VITE_SQLITE_DB_NAME || 'orange-sync-demo_vfs2.sqlite3';
 export const localDbName = readLocalDbNameOverride() || configuredLocalDbName;

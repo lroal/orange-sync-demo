@@ -3,7 +3,7 @@ import { createDemoMap, demoCommands } from '../../shared/schema.js';
 
 const params = new URL(globalThis.location.href).searchParams;
 const localDbName = params.get('db') || 'orange-sync-demo_vfs2.sqlite3';
-const syncUrl = params.get('syncUrl') || ('http://' + globalThis.location.hostname + ':8080/rdb');
+const syncUrl = params.get('syncUrl') || '/rdb';
 const busyTimeoutMs = parsePositiveInteger(params.get('busyTimeoutMs'), 5000);
 const map = createDemoMap(rdb);
 const ports = new Set();
