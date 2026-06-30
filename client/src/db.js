@@ -8,19 +8,19 @@ export const localDbName = readLocalDbNameOverride() || configuredLocalDbName;
 export const bigMode = import.meta.env.VITE_BIG_MODE === '1' || localDbName.includes('big');
 export const syncOperationTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SYNC_OPERATION_TIMEOUT_MS, 300000);
 const map = createDemoMap(rdb);
-const sharedDbWorker = createSharedDbWorker();
-if (sharedDbWorker && sharedDbWorker.port && typeof sharedDbWorker.port.addEventListener === 'function') {
-  sharedDbWorker.port.addEventListener('message', (event) => {
+const dbWorker = createDbWorker();
+if (dbWorker && typeof dbWorker.addEventListener === 'function') {
+  dbWorker.addEventListener('message', (event) => {
     const message = event && event.data;
     if (!message || message.type !== 'orange-demo-diagnostic')
       return;
-    console.info('[shared-worker]', message.event, message.payload);
+    console.info('[db-worker]', message.event, message.payload);
   });
 }
-const sharedDbClient = rdb.createSharedDbWorkerClient(sharedDbWorker);
+const dbWorkerClient = rdb.createDbWorkerClient(dbWorker);
 
 if (typeof globalThis.addEventListener === 'function')
-  globalThis.addEventListener('pagehide', () => sharedDbClient.close(), { once: true });
+  globalThis.addEventListener('pagehide', () => dbWorkerClient.close(), { once: true });
 
 export function rotateLocalDbNameForRecovery() {
   if (typeof localStorage === 'undefined')
@@ -48,7 +48,7 @@ function addRecoverySuffix(dbName) {
 }
 
 export const db = map({
-  db: sharedDbClient,
+  db: dbWorkerClient,
   commands: demoCommands
 });
 
@@ -57,13 +57,13 @@ function parsePositiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function createSharedDbWorker() {
-  const workerUrl = new URL('./db.shared-worker.js', import.meta.url);
+function createDbWorker() {
+  const workerUrl = new URL('./db.worker.js', import.meta.url);
   workerUrl.searchParams.set('db', localDbName);
   workerUrl.searchParams.set('syncUrl', syncUrl);
   workerUrl.searchParams.set('busyTimeoutMs', '5000');
-  return new SharedWorker(workerUrl, {
+  return new Worker(workerUrl, {
     type: 'module',
-    name: 'orange-sync-demo:' + localDbName + ':sahpool-inline'
+    name: 'orange-sync-demo:' + localDbName + ':opfs-db-worker'
   });
 }
