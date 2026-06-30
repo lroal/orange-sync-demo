@@ -36,6 +36,12 @@ globalThis.addEventListener('connect', (event) => {
   const port = event.ports && event.ports[0];
   if (port) {
     ports.add(port);
+    safePostDiagnostic(port, 'environment', {
+      localDbName,
+      workerSupport: typeof Worker !== 'undefined',
+      sharedArrayBufferSupport: typeof SharedArrayBuffer !== 'undefined',
+      crossOriginIsolated: globalThis.crossOriginIsolated === true
+    });
     port.addEventListener('message', (messageEvent) => {
       if (messageEvent.data && messageEvent.data.type === 'orange-shared-db-port-close')
         ports.delete(port);
@@ -46,16 +52,22 @@ globalThis.addEventListener('connect', (event) => {
 
 function broadcastDiagnostic(event, payload) {
   for (const port of Array.from(ports)) {
-    try {
-      port.postMessage({
-        type: 'orange-demo-diagnostic',
-        event,
-        payload
-      });
-    }
-    catch (_e) {
+    if (!safePostDiagnostic(port, event, payload))
       ports.delete(port);
-    }
+  }
+}
+
+function safePostDiagnostic(port, event, payload) {
+  try {
+    port.postMessage({
+      type: 'orange-demo-diagnostic',
+      event,
+      payload
+    });
+    return true;
+  }
+  catch (_e) {
+    return false;
   }
 }
 
