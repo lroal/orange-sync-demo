@@ -11,13 +11,13 @@ npm install
 DATABASE_URL=postgres://orange:orange@localhost:54329/orange_sync_demo npm run dev
 ```
 
-In a devcontainer, open http://localhost:8080 and run:
+In a devcontainer, open http://localhost:5173 and run:
 
 ```bash
 npm run dev
 ```
 
-The backend uses Postgres through `DATABASE_URL`. The devcontainer defines Postgres in Docker Compose and exposes the app through nginx with Brotli/gzip compression on port 8080.
+The backend uses Postgres through `DATABASE_URL`. In the devcontainer, Vite serves the browser app on port 5173 while sync and API requests go through nginx on port 8080.
 
 Root `npm install` installs both `client` and `server`. You can also install them separately:
 
@@ -26,7 +26,9 @@ cd client && npm install
 cd ../server && npm install
 ```
 
-nginx devcontainer entrypoint: http://localhost:8080
+Frontend devcontainer entrypoint: http://localhost:5173
+
+nginx sync/API entrypoint: http://localhost:8080
 
 Backend direct: http://localhost:3055
 
@@ -52,8 +54,6 @@ The project list is paged so the UI only reads one page from local SQLite at a t
 
 Use browser network throttling to simulate low bandwidth; the demo does not add artificial server delay or change sync batch sizes for these profiles.
 
-Sync timing is logged to the browser console as `[sync-trace]`. In big mode, apply-phase SQL timing is logged as `[sync-apply-sql]`; disable or enable it at runtime with `orangeSyncTrace.setApplySql(false)` / `orangeSyncTrace.setApplySql(true)`, or set `VITE_TRACE_APPLY_SQL=0|1` before starting the demo.
-
 ## Model
 
 Relations included:
@@ -66,4 +66,8 @@ Relations included:
 - `task.project`: `references`
 - `task.assignee`: `references`
 
-The browser client uses `sqliteOPFS` for local SQLite storage. Sync push/pull uses `/rdb?sync=push` and `/rdb?sync=pull`.
+The browser client routes local SQLite through a SharedWorker-backed `sqliteOPFS` database using the plain `opfs` VFS. Sync push/pull uses `/rdb?sync=push` and `/rdb?sync=pull`.
+
+## TODO
+
+- Add proper `sqliteOPFS` concurrency for the SharedWorker model: keep write transactions exclusive with a FIFO writer checkout, and add a separate readonly connection/lane so reads can run during an active write transaction while only seeing committed snapshots when the active VFS supports it.

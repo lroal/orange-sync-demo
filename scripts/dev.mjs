@@ -1,12 +1,16 @@
 import { spawn } from 'node:child_process';
 
-const useSahPool = !process.argv.includes('--opfs');
 const useBigDb = process.argv.includes('--big');
 
 const commands = [
   ['server', ['run', 'dev', '--prefix', 'server']],
   ['client', ['run', 'dev', '--prefix', 'client'], getClientEnv()]
 ];
+
+if (process.env.DEVCONTAINER === 'true' || process.env.REMOTE_CONTAINERS === 'true') {
+  console.log('Devcontainer frontend: http://localhost:5173');
+  console.log('Sync and API use nginx on http://localhost:8080.');
+}
 
 const children = commands.map(([name, args, env]) => {
   const child = spawn('npm', args, {
@@ -65,17 +69,5 @@ function getClientEnv() {
       }
     : {};
 
-  if (!useSahPool) {
-    return {
-      ...modeEnv,
-      VITE_SQLITE_OPFS_VFS: 'opfs',
-      VITE_SQLITE_OPFS_SAH_FALLBACK: ''
-    };
-  }
-
-  return {
-    ...modeEnv,
-    VITE_SQLITE_OPFS_VFS: process.env.VITE_SQLITE_OPFS_VFS || 'opfs-sahpool',
-    VITE_SQLITE_OPFS_SAH_FALLBACK: process.env.VITE_SQLITE_OPFS_SAH_FALLBACK || '1'
-  };
+  return modeEnv;
 }
