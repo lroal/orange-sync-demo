@@ -11,7 +11,6 @@ const ports = new Set();
 const db = map({
   db: (con) => con.sqliteOPFS(localDbName, {
     busyTimeoutMs,
-    inlineWorker: true,
     sync: {
       url: syncUrl,
       auto: false
