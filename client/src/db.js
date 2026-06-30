@@ -14,6 +14,7 @@ console.info('[local-db] using main-thread ORM sqliteOPFS', {
   localDbName,
   syncUrl,
   sqliteBusyTimeoutMs,
+  sqliteWorker: 'dedicated',
   vfs: 'opfs-sahpool',
   stableBase: false,
   crossTabLock: false
@@ -22,7 +23,6 @@ console.info('[local-db] using main-thread ORM sqliteOPFS', {
 export const db = map({
   db: (con) => con.sqliteOPFS(localDbName, {
     busyTimeoutMs: sqliteBusyTimeoutMs,
-    inlineWorker: true,
     vfs: 'opfs-sahpool',
     sync: {
       url: syncUrl,

@@ -66,7 +66,7 @@ Relations included:
 - `task.project`: `references`
 - `task.assignee`: `references`
 
-The browser client currently runs ORM and sync from the UI thread against `sqliteOPFS` directly with the `opfs-sahpool` VFS. When the UI is opened on Vite port 5173, sync push/pull uses nginx on `http://localhost:8080/rdb`.
+The browser client currently runs ORM and sync from the UI thread against `sqliteOPFS` with the `opfs-sahpool` VFS. SQLite/OPFS itself still runs in its required dedicated worker. When the UI is opened on Vite port 5173, sync push/pull uses nginx on `http://localhost:8080/rdb`.
 
 ## TODO
 
