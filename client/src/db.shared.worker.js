@@ -1,5 +1,6 @@
 const states = new Map();
 const pending = new Map();
+const activationTimeoutMs = 8000;
 let activeState = null;
 let nextRelayId = 1;
 let nextTransactionId = 1;
@@ -33,6 +34,14 @@ function handlePageMessage(state, event) {
     return;
   }
 
+  if (message.type === 'orange-demo-db-port-open-error') {
+    failActivation(state, message.error || {
+      name: 'Error',
+      message: 'Dedicated DB worker failed to open.'
+    });
+    return;
+  }
+
   if (message.type === 'orange-shared-db-port-close' || message.type === 'orange-demo-db-port-close') {
     closeState(state);
     return;
@@ -53,6 +62,7 @@ function attachDbPort(state, dbPort) {
       dbPort.close();
     return;
   }
+  clearActivationTimer(state);
   state.dbPort = dbPort;
   state.activationRequested = false;
   dbPort.addEventListener('message', (event) => handleDbMessage(state, event));
@@ -65,6 +75,7 @@ function attachDbPort(state, dbPort) {
 function forwardRequest(sourceState, message) {
   if (!activeState || !activeState.dbPort) {
     sourceState.backlog.push(message);
+    requestActiveDbPort();
     return;
   }
 
@@ -132,6 +143,7 @@ function closeState(state) {
     if (typeof state.dbPort.close === 'function')
       state.dbPort.close();
   }
+  clearActivationTimer(state);
   dropPendingForSource(state);
   rejectPendingForState(state);
   if (activeState === state)
@@ -158,7 +170,7 @@ function dropPendingForSource(sourceState) {
   }
 }
 
-function rejectPendingForState(dbState) {
+function rejectPendingForState(dbState, error) {
   for (const [relayId, entry] of Array.from(pending)) {
     if (entry.dbState !== dbState)
       continue;
@@ -166,10 +178,24 @@ function rejectPendingForState(dbState) {
     safePost(entry.sourceState.port, {
       type: 'orange-db-response',
       id: entry.originalId,
-      error: {
+      error: normalizeError(error || {
         name: 'Error',
         message: 'Shared DB worker lost its active DB port.'
-      }
+      })
+    });
+  }
+}
+
+function failBacklog(state, error) {
+  const backlog = state.backlog.splice(0);
+  for (let i = 0; i < backlog.length; i++) {
+    const message = backlog[i];
+    if (!message || message.type !== 'orange-db-request')
+      continue;
+    safePost(state.port, {
+      type: 'orange-db-response',
+      id: message.id,
+      error: normalizeError(error)
     });
   }
 }
@@ -192,7 +218,31 @@ function requestActiveDbPort() {
     return;
   activeState = state;
   state.activationRequested = true;
+  state.activationTimer = setTimeout(() => {
+    failActivation(state, {
+      name: 'Error',
+      message: 'Dedicated DB worker did not register its DB port within 8 seconds.'
+    });
+  }, activationTimeoutMs);
   safePost(state.port, { type: 'orange-demo-start-db-worker' });
+}
+
+function failActivation(state, error) {
+  if (!state || state.closed || state.dbPort)
+    return;
+  clearActivationTimer(state);
+  state.activationRequested = false;
+  if (activeState === state)
+    activeState = null;
+  failBacklog(state, error);
+  rejectPendingForState(state, error);
+}
+
+function clearActivationTimer(state) {
+  if (!state || !state.activationTimer)
+    return;
+  clearTimeout(state.activationTimer);
+  state.activationTimer = null;
 }
 
 function nextActivatableState() {
@@ -213,4 +263,12 @@ function safePost(port, message) {
     port.postMessage(message);
   }
   catch (_e) {}
+}
+
+function normalizeError(error) {
+  return {
+    name: error && error.name || 'Error',
+    message: error && error.message ? error.message : String(error || 'Shared DB worker failed.'),
+    stack: error && error.stack
+  };
 }

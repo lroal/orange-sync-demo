@@ -7,6 +7,12 @@ const syncUrl = params.get('syncUrl') || '/rdb';
 const busyTimeoutMs = parsePositiveInteger(params.get('busyTimeoutMs'), 5000);
 const map = createDemoMap(rdb);
 
+safePostDiagnostic('worker-script-start', {
+  localDbName,
+  syncUrl,
+  busyTimeoutMs
+});
+
 const db = map({
   db: (con) => con.sqliteOPFS(localDbName, {
     busyTimeoutMs,

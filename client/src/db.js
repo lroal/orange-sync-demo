@@ -2,6 +2,7 @@ import rdb from 'orange-orm';
 import { createDemoMap, demoCommands } from '../../shared/schema.js';
 
 const syncUrl = resolveDevServerUrl(import.meta.env.VITE_SYNC_URL || '/rdb', '/rdb');
+const workerRevision = 'sharedworker-sync-v3';
 const localDbNameOverrideKey = 'orange-sync-demo.localDbNameOverride';
 const configuredLocalDbName = import.meta.env.VITE_SQLITE_DB_NAME || 'orange-sync-demo_vfs2.sqlite3';
 export const localDbName = readLocalDbNameOverride() || configuredLocalDbName;
@@ -72,18 +73,38 @@ function createDedicatedDbWorker() {
   workerUrl.searchParams.set('db', localDbName);
   workerUrl.searchParams.set('syncUrl', syncUrl);
   workerUrl.searchParams.set('busyTimeoutMs', '5000');
+  workerUrl.searchParams.set('rev', workerRevision);
+  console.info('[shared-db] starting dedicated DB worker', {
+    localDbName,
+    syncUrl,
+    workerRevision
+  });
   return new Worker(workerUrl, {
     type: 'module',
-    name: 'orange-sync-demo:' + localDbName + ':opfs-db-worker'
+    name: 'orange-sync-demo:' + localDbName + ':' + workerRevision + ':opfs-db-worker'
   });
 }
 
 function createSharedDbWorker() {
   const workerUrl = new URL('./db.shared.worker.js', import.meta.url);
-  return new SharedWorker(workerUrl, {
-    type: 'module',
-    name: 'orange-sync-demo:' + localDbName + ':db-coordinator'
+  workerUrl.searchParams.set('rev', workerRevision);
+  console.info('[shared-db] creating SharedWorker', {
+    localDbName,
+    workerRevision
   });
+  const worker = new SharedWorker(workerUrl, {
+    type: 'module',
+    name: 'orange-sync-demo:' + localDbName + ':' + workerRevision + ':db-coordinator'
+  });
+  if (typeof worker.addEventListener === 'function') {
+    worker.addEventListener('error', (event) => {
+      console.error('[shared-db] SharedWorker failed', event.message || event);
+    });
+    worker.addEventListener('messageerror', (event) => {
+      console.error('[shared-db] SharedWorker message error', event);
+    });
+  }
+  return worker;
 }
 
 function registerDedicatedDbWorker(sharedWorker, dedicatedWorker) {
@@ -93,6 +114,7 @@ function registerDedicatedDbWorker(sharedWorker, dedicatedWorker) {
   if (typeof port.start === 'function')
     port.start();
   const channel = new MessageChannel();
+  console.info('[shared-db] registering dedicated DB port');
   port.postMessage({ type: 'orange-demo-register-db-port' }, [channel.port1]);
   dedicatedWorker.postMessage({ type: 'orange-demo-connect-db-port' }, [channel.port2]);
 }
@@ -102,6 +124,7 @@ function handleSharedDbWorkerMessage(event) {
   if (!message)
     return;
   if (message.type === 'orange-demo-start-db-worker') {
+    console.info('[shared-db] SharedWorker requested a dedicated DB worker');
     startDedicatedDbWorker();
     return;
   }
@@ -117,7 +140,14 @@ function handleSharedDbWorkerMessage(event) {
 function startDedicatedDbWorker() {
   if (dbWorker)
     return;
-  dbWorker = createDedicatedDbWorker();
+  try {
+    dbWorker = createDedicatedDbWorker();
+  }
+  catch (e) {
+    console.error('[db-worker] could not be created', e);
+    notifyDbWorkerOpenError(e && e.message || String(e));
+    return;
+  }
   if (dbWorker && typeof dbWorker.addEventListener === 'function') {
     dbWorker.addEventListener('message', (event) => {
       const message = event && event.data;
@@ -125,8 +155,34 @@ function startDedicatedDbWorker() {
         return;
       console.info('[db-worker]', message.event, message.payload);
     });
+    dbWorker.addEventListener('error', (event) => {
+      console.error('[db-worker] failed', event.message || event);
+      notifyDbWorkerOpenError(event.message || 'Dedicated DB worker failed.');
+      dbWorker = null;
+    });
+    dbWorker.addEventListener('messageerror', (event) => {
+      console.error('[db-worker] message error', event);
+      notifyDbWorkerOpenError('Dedicated DB worker message error.');
+      dbWorker = null;
+    });
   }
   registerDedicatedDbWorker(sharedDbWorker, dbWorker);
+}
+
+function notifyDbWorkerOpenError(error) {
+  const port = sharedDbWorker && sharedDbWorker.port;
+  if (!port || typeof port.postMessage !== 'function')
+    return;
+  try {
+    port.postMessage({
+      type: 'orange-demo-db-port-open-error',
+      error: {
+        name: 'Error',
+        message: typeof error === 'string' ? error : String(error)
+      }
+    });
+  }
+  catch (_e) {}
 }
 
 function stopDedicatedDbWorker() {
