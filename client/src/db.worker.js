@@ -19,7 +19,7 @@ const db = map({
   commands: demoCommands
 });
 
-const handler = rdb.createDbWorkerHandler(db, { autoStart: false });
+const globalHandler = rdb.createDbWorkerHandler(db, { autoStart: false });
 
 rdb.on('sqliteOpen', (payload) => {
   safePostDiagnostic('sqliteOpen', {
@@ -35,8 +35,38 @@ safePostDiagnostic('environment', {
 });
 
 globalThis.addEventListener('message', (event) => {
-  void handler.handleMessage(event);
+  const message = event && event.data;
+  if (message && message.type === 'orange-demo-connect-db-port') {
+    connectPort(event.ports && event.ports[0]);
+    return;
+  }
+  if (message && message.type === 'orange-demo-db-port-close') {
+    globalHandler.stop();
+    return;
+  }
+  void globalHandler.handleMessage(event);
 });
+
+function connectPort(port) {
+  if (!port)
+    return;
+  const handler = rdb.createDbWorkerHandler(db, {
+    autoStart: false,
+    postMessage: (message) => safePostPort(port, message)
+  });
+  port.addEventListener('message', (messageEvent) => {
+    const message = messageEvent && messageEvent.data;
+    if (message && message.type === 'orange-demo-db-port-close') {
+      handler.stop();
+      if (typeof port.close === 'function')
+        port.close();
+      return;
+    }
+    void handler.handleMessage(messageEvent);
+  });
+  if (typeof port.start === 'function')
+    port.start();
+}
 
 function environmentDiagnostics() {
   return {
@@ -60,16 +90,18 @@ function hasOpfsApiSupport() {
 }
 
 function safePostDiagnostic(event, payload) {
+  globalThis.postMessage({
+    type: 'orange-demo-diagnostic',
+    event,
+    payload
+  });
+}
+
+function safePostPort(port, message) {
   try {
-    globalThis.postMessage({
-      type: 'orange-demo-diagnostic',
-      event,
-      payload
-    });
+    port.postMessage(message);
   }
-  catch (_e) {
-    // The page may have gone away while the worker is still shutting down.
-  }
+  catch (_e) {}
 }
 
 function parsePositiveInteger(value, fallback) {

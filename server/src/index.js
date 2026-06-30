@@ -46,6 +46,8 @@ const db = map({
 })({
   commandHandlers: {
     async addServerTask(db, args) {
+      console.log('serer')
+      console.dir('start servertask');
       const { projectId, title } = args || {};
       if (typeof projectId !== 'string' || !projectId)
         throw new Error('addServerTask requires projectId');
@@ -58,6 +60,7 @@ const db = map({
         done: false,
         sortOrder: 99
       });
+      console.dir({command: args});
       return { created: true };
     }
   }

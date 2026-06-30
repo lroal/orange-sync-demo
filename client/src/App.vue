@@ -1,23 +1,19 @@
 <script setup>
-import { computed, onMounted, reactive, ref, shallowRef } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
 import { bigMode, db, localDbName, rotateLocalDbNameForRecovery, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
 import rdb from 'orange-orm';
 db.reactive(reactive);
 
-// rdb.on('queryComplete', ({ sql, parameters, elapsedMs, workerElapsedMs, error }) => {
-// 	const workerPart = typeof workerElapsedMs === 'number'
-// 		? `, worker ${workerElapsedMs.toFixed(1)} ms`
-// 		: '';
-// 	console.info(`[sql] ${elapsedMs.toFixed(1)} ms${workerPart}${error ? ' failed' : ''}`, { sql, parameters });
-// });
-
 rdb.on('sqliteOpen', ({ connectionString, filename, requestedVfs, vfs, fallback, readonly }) => {
-	const fallbackPart = fallback ? ', fallback' : '';
-	const readonlyPart = readonly ? ', readonly' : '';
-	console.info(`[sqliteOPFS] opened vfs=${vfs}, requested=${requestedVfs}${fallbackPart}${readonlyPart}`, {
-		connectionString,
-		filename
-	});
+  console.info('[sqliteOPFS] open', {
+    connectionString,
+    filename,
+    requestedVfs,
+    vfs,
+    fallback,
+    readonly,
+    localDbName
+  });
 });
 
 const projects = shallowRef([]);
@@ -27,12 +23,14 @@ const status = ref('Booting local database');
 const busy = ref(false);
 const lastSync = ref(null);
 const newTaskTitle = ref('');
-const serverUrl = import.meta.env.VITE_SERVER_URL || '';
+const serverUrl = resolveDevServerUrl(import.meta.env.VITE_SERVER_URL || '', '');
 const projectPage = ref(0);
 const projectPageSize = ref(parsePositiveInteger(import.meta.env.VITE_PROJECT_PAGE_SIZE, 25));
 const projectTotal = ref(0);
 const serverBigProfile = ref(import.meta.env.VITE_BIG_SERVER_PROFILE || 'many');
 let localSchemaResetAttempted = false;
+let mounted = false;
+let autoSyncStarted = false;
 const sqliteCorruptionRecoveryKey = 'orange-sync-demo.sqliteCorruptionRecoveryAttempted';
 
 const selectedProject = computed(() =>
@@ -47,9 +45,20 @@ function parsePositiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-onMounted(async () => {
+function resolveDevServerUrl(value, fallback) {
+  if (value && value !== fallback)
+    return value;
+  if (typeof globalThis.location === 'undefined')
+    return value || fallback;
+  const { protocol, hostname, port } = globalThis.location;
+  if (port === '5173')
+    return `${protocol}//${hostname}:8080`;
+  return value || fallback;
+}
+
+onMounted(() => {
+  mounted = true;
   db.syncClient.on('pull', async () => {
-    console.dir('on pull');
     lastSync.value = new Date();
     await refreshLocal();
   });
@@ -59,70 +68,63 @@ onMounted(async () => {
   db.syncClient.on('error', ({ error }) => {
     void handleSyncError(error);
   });
-  await run('Starting auto sync', async () => {
-    await db.syncClient.start();
-    sessionStorage.removeItem(sqliteCorruptionRecoveryKey);
-  });
+  status.value = 'Starting sync';
+  sessionStorage.removeItem(sqliteCorruptionRecoveryKey);
+  setTimeout(() => {
+    void startSyncClient('auto sync start');
+  }, 0);
+});
+
+onBeforeUnmount(() => {
+  mounted = false;
+  void stopSyncClient();
 });
 
 async function refreshLocal() {
-	const startedAt = performance.now();
-	try {
-		const fetchStartedAt = performance.now();
-    const total = await readProjectTotal();
-    projectTotal.value = total;
-    const maxPage = Math.max(0, Math.ceil(total / projectPageSize.value) - 1);
-    if (projectPage.value > maxPage)
-      projectPage.value = maxPage;
-		const [fetchedProjectRows, personRows] = await Promise.all([
-			time('db.project.getAll with relations', () => db.project.getAll({
-				owner: { team: {} },
-				detail: {},
-				tasks: { assignee: {}, orderBy: 'sortOrder' },
-				orderBy: 'id',
-        limit: projectPageSize.value,
-        offset: projectPage.value * projectPageSize.value
-			})),
-			time('db.person.getAll with team', () => db.person.getAll({ team: {}, orderBy: 'name' }))
-		]);
-		console.info(`[timing] project/person Promise.all getAll took ${(performance.now() - fetchStartedAt).toFixed(1)} ms`);
-
-    const viewStartedAt = performance.now();
-    projects.value = fetchedProjectRows;
-    people.value = personRows;
-    if (!projects.value.some((project) => project.id === selectedProjectId.value))
-      selectedProjectId.value = null;
-    if (!selectedProjectId.value && projects.value.length > 0)
-      selectedProjectId.value = projects.value[0].id;
-    console.info(`[timing] refreshLocal view assignment took ${(performance.now() - viewStartedAt).toFixed(1)} ms`);
+  const { total, missingLocalSchema } = await readProjectTotal();
+  if (missingLocalSchema) {
+    clearLocalView();
+    return;
   }
-  finally {
-    const elapsedMs = performance.now() - startedAt;
-    console.info(`[timing] refreshLocal took ${elapsedMs.toFixed(1)} ms`);
-	}
+  projectTotal.value = total;
+  const maxPage = Math.max(0, Math.ceil(total / projectPageSize.value) - 1);
+  if (projectPage.value > maxPage)
+    projectPage.value = maxPage;
+  const [fetchedProjectRows, personRows] = await Promise.all([
+    db.project.getAll({
+      owner: { team: {} },
+      detail: {},
+      tasks: { assignee: {}, orderBy: 'sortOrder' },
+      orderBy: 'id',
+      limit: projectPageSize.value,
+      offset: projectPage.value * projectPageSize.value
+    }),
+    db.person.getAll({ team: {}, orderBy: 'name' })
+  ]);
+
+  projects.value = fetchedProjectRows;
+  people.value = personRows;
+  if (!projects.value.some((project) => project.id === selectedProjectId.value))
+    selectedProjectId.value = null;
+  if (!selectedProjectId.value && projects.value.length > 0)
+    selectedProjectId.value = projects.value[0].id;
 }
 
 async function readProjectTotal() {
   try {
     const rows = await db.query('SELECT COUNT(*) AS count FROM "project"');
     const row = Array.isArray(rows) ? rows[0] : rows?.rows?.[0];
-    return Number(row?.count ?? row?.COUNT ?? 0);
+    const total = Number(row?.count ?? row?.COUNT ?? 0);
+    console.info('[local-db] project count', { total, localDbName });
+    return { total, missingLocalSchema: false };
   }
   catch (e) {
-    if (/no such table/u.test(e && e.message || String(e)))
-      return 0;
+    if (/no such table/u.test(e && e.message || String(e))) {
+      console.info('[local-db] project table missing', { localDbName, error: e && e.message || String(e) });
+      return { total: 0, missingLocalSchema: true };
+    }
     throw e;
   }
-}
-
-async function time(label, fn) {
-	const startedAt = performance.now();
-	try {
-		return await fn();
-	}
-	finally {
-		console.info(`[timing] ${label} took ${(performance.now() - startedAt).toFixed(1)} ms`);
-	}
 }
 
 async function handleSyncError(error) {
@@ -213,8 +215,7 @@ async function seedBigServerDatabase() {
     });
     if (!response.ok)
       throw new Error(`Server big seed failed with status ${response.status}`);
-    const result = await response.json();
-    console.info('[timing] seedBigServerDatabase', result);
+    await response.json();
     await resetAndBootstrapFromServer({
       resetLabel: 'seed server local reset',
       syncLabel: 'seeded server bootstrap sync'
@@ -242,7 +243,7 @@ async function resetAndBootstrapFromServer({ resetLabel, syncLabel }) {
   await syncWithTiming(syncLabel);
   lastSync.value = new Date();
   await refreshLocal();
-  await db.syncClient.start();
+  await startSyncClient('post-bootstrap sync start');
 }
 
 async function resetLocalDatabase() {
@@ -299,16 +300,10 @@ async function createProject() {
 }
 
 async function toggleTask(task) {
-  const startedAt = performance.now();
   try {
     await run('Saving local task change', async () => {
-      const mutateStartedAt = performance.now();
       task.done = !task.done;
-      console.info(`[timing] toggleTask mutate row took ${(performance.now() - mutateStartedAt).toFixed(1)} ms`);
-
-      const saveStartedAt = performance.now();
       await projects.value.saveChanges({});
-      console.info(`[timing] toggleTask saveChanges took ${(performance.now() - saveStartedAt).toFixed(1)} ms`);
 
       // const row = await db.task.getById(task.id);
       // row.done = !row.done;
@@ -317,11 +312,7 @@ async function toggleTask(task) {
     });
   }
   catch(e) {
-    console.dir(e);
-  }
-  finally {
-    const elapsedMs = performance.now() - startedAt;
-    console.log(`[timing] toggleTask took ${elapsedMs.toFixed(1)} ms`);
+    status.value = e.message || String(e);
   }
 }
 
@@ -429,7 +420,24 @@ async function syncOperation(label, fn) {
   return await withTimeout(traceSyncOperation(label, fn), syncOperationTimeoutMs, label);
 }
 
+async function startSyncClient(label) {
+  if (autoSyncStarted)
+    return;
+  autoSyncStarted = true;
+  try {
+    await withTimeout(db.syncClient.start(), Math.min(syncOperationTimeoutMs, 15000), label);
+    if (mounted)
+      status.value = 'Idle';
+  }
+  catch (e) {
+    autoSyncStarted = false;
+    if (mounted)
+      await handleSyncError(e);
+  }
+}
+
 async function stopSyncClient() {
+  autoSyncStarted = false;
   if (typeof db.syncClient.stop === 'function')
     await db.syncClient.stop();
 }
@@ -438,7 +446,7 @@ function withTimeout(promise, timeoutMs, label) {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error(`${label} did not finish within ${Math.round(timeoutMs / 1000)} seconds. Check the browser console for the last [sync-fetch] or [sync-sqlite] line; sqliteOPFS may be blocked by a stuck worker/tab.`));
+      reject(new Error(`${label} did not finish within ${Math.round(timeoutMs / 1000)} seconds.`));
     }, timeoutMs);
   });
   return Promise.race([promise, timeout])
@@ -453,7 +461,6 @@ async function run(message, fn) {
     status.value = 'Idle';
   }
   catch (e) {
-    console.dir(e);
     if (await recoverLocalSyncSchemaMismatch(e))
       return;
     if (recoverLocalSqliteCorruption(e))

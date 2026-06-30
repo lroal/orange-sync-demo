@@ -42,7 +42,7 @@ Use a separate browser OPFS database for bootstrap sync performance testing:
 npm run dev:big
 ```
 
-This uses `orange-sync-demo-big2.sqlite3`. To test sync transfer performance, choose a profile and click `Seed server + bootstrap sync`. This resets the server demo tables, creates synthetic server-side rows, resets the local big database, and performs a real bootstrap pull through `/rdb?sync=pull`.
+This uses `orange-sync-demo-big2.sqlite3`. To test sync transfer performance, choose a profile and click `Seed server + bootstrap sync`. This resets the server demo tables, creates synthetic server-side rows, resets the local big database, and performs a real bootstrap pull through the nginx sync endpoint on `http://localhost:8080/rdb?sync=pull`.
 
 To measure a full bootstrap sync without reseeding the server, click `Bootstrap sync`. This resets only the local browser database and pulls the current server rows. `Reset local only` clears the local browser database without starting a sync.
 
@@ -66,7 +66,7 @@ Relations included:
 - `task.project`: `references`
 - `task.assignee`: `references`
 
-The browser client routes local SQLite through a SharedWorker-backed `sqliteOPFS` database using the plain `opfs` VFS. Sync push/pull uses `/rdb?sync=push` and `/rdb?sync=pull`.
+The browser client routes local SQLite through a SharedWorker-backed `sqliteOPFS` database using the plain `opfs` VFS. When the UI is opened on Vite port 5173, sync push/pull uses nginx on `http://localhost:8080/rdb`.
 
 ## TODO
 

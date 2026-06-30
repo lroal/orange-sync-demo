@@ -15,7 +15,7 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "orange-orm": "github:alfateam/orange-orm#sync",
+    "orange-orm": "github:alfateam/orange-orm#sharedworker",
     "pg": "^8.21.0"
   }
 }
