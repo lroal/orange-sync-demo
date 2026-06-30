@@ -65,6 +65,6 @@ function createSharedDbWorker() {
   workerUrl.searchParams.set('busyTimeoutMs', '5000');
   return new SharedWorker(workerUrl, {
     type: 'module',
-    name: 'orange-sync-demo:' + localDbName + ':opfs'
+    name: 'orange-sync-demo:' + localDbName + ':opfs-inline'
   });
 }

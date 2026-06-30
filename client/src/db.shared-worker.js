@@ -11,6 +11,7 @@ const ports = new Set();
 const db = map({
   db: (con) => con.sqliteOPFS(localDbName, {
     busyTimeoutMs,
+    inlineWorker: true,
     sync: {
       url: syncUrl,
       auto: false
@@ -24,7 +25,10 @@ const handler = rdb.createSharedDbWorkerHandler(() => db, { autoConnect: false }
 rdb.on('sqliteOpen', (payload) => {
   broadcastDiagnostic('sqliteOpen', {
     ...payload,
-    localDbName
+    localDbName,
+    workerSupport: typeof Worker !== 'undefined',
+    sharedArrayBufferSupport: typeof SharedArrayBuffer !== 'undefined',
+    crossOriginIsolated: globalThis.crossOriginIsolated === true
   });
 });
 
