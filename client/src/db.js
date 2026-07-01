@@ -14,8 +14,7 @@ console.info('[local-db] using main-thread ORM sqliteOPFS', {
   localDbName,
   syncUrl,
   sqliteBusyTimeoutMs,
-  sqliteWorker: 'dedicated',
-  stableBase: false
+  sqliteWorker: 'dedicated'
 });
 
 export const db = map({
@@ -23,8 +22,7 @@ export const db = map({
     busyTimeoutMs: sqliteBusyTimeoutMs,
     sync: {
       url: syncUrl,
-      auto: false,
-      stableBase: false
+      auto: false
     }
   }),
   commands: demoCommands
