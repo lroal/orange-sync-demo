@@ -20,7 +20,7 @@ console.info('[local-db] using main-thread ORM sqliteOPFS', {
   vfs: sqliteVfs,
   fallbackVfs: sqliteFallbackVfs,
   stableBase: false,
-  crossTabLock: false,
+  crossTabLock: true,
   crossTabWriteLock: true
 });
 
@@ -34,7 +34,7 @@ export const db = map({
       url: syncUrl,
       auto: false,
       stableBase: false,
-      crossTabLock: false
+      crossTabLock: true
     }
   }),
   commands: demoCommands
