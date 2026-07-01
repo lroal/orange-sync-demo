@@ -10,7 +10,7 @@
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "orange-orm": "github:alfateam/orange-orm#sharedworker",
+    "orange-orm": "github:alfateam/orange-orm#sync_v7_cleanup",
     "pg": "^8.13.1"
   }
 }
