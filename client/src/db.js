@@ -5,8 +5,6 @@ const syncUrl = resolveDevServerUrl(import.meta.env.VITE_SYNC_URL || '/rdb', '/r
 const localDbNameOverrideKey = 'orange-sync-demo.localDbNameOverride';
 const configuredLocalDbName = import.meta.env.VITE_SQLITE_DB_NAME || 'orange-sync-demo_vfs2.sqlite3';
 const sqliteBusyTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SQLITE_BUSY_TIMEOUT_MS, 5000);
-const sqliteVfs = 'opfs-sahpool';
-const sqliteFallbackVfs = 'opfs-wl';
 export const localDbName = readLocalDbNameOverride() || configuredLocalDbName;
 export const bigMode = import.meta.env.VITE_BIG_MODE === '1' || localDbName.includes('big');
 export const syncOperationTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SYNC_OPERATION_TIMEOUT_MS, 300000);
@@ -17,30 +15,20 @@ console.info('[local-db] using main-thread ORM sqliteOPFS', {
   syncUrl,
   sqliteBusyTimeoutMs,
   sqliteWorker: 'dedicated',
-  vfs: sqliteVfs,
-  fallbackVfs: sqliteFallbackVfs,
-  stableBase: false,
-  crossTabLock: true,
-  crossTabWriteLock: true
+  stableBase: false
 });
 
 export const db = map({
   db: (con) => con.sqliteOPFS(localDbName, {
     busyTimeoutMs: sqliteBusyTimeoutMs,
-    vfs: sqliteVfs,
-    fallbackVfs: sqliteFallbackVfs,
-    crossTabWriteLock: true,
     sync: {
       url: syncUrl,
       auto: false,
-      stableBase: false,
-      crossTabLock: true
+      stableBase: false
     }
   }),
   commands: demoCommands
 });
-
-
 
 if (typeof globalThis.addEventListener === 'function') {
   globalThis.addEventListener('pagehide', () => {
