@@ -40,6 +40,8 @@ export const db = map({
   commands: demoCommands
 });
 
+
+
 if (typeof globalThis.addEventListener === 'function') {
   globalThis.addEventListener('pagehide', () => {
     if (db && typeof db.close === 'function')
