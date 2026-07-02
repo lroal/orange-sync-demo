@@ -9,7 +9,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "orange-orm": "github:alfateam/orange-orm#sync_v12_reset_local_commands",
+    "orange-orm": "github:alfateam/orange-orm#sync_v15_reset_local_schema",
     "pg": "^8.13.1"
   }
 }
