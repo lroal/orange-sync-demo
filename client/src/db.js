@@ -9,23 +9,30 @@ const sqliteBusyTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SQLITE_BUS
 export const localDbName = bigModeEnabled ? bigLocalDbName : normalLocalDbName;
 export const bigMode = bigModeEnabled;
 export const syncOperationTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SYNC_OPERATION_TIMEOUT_MS, 300000);
+const sahPoolRecoveryKey = `orange-sync-demo.clearSahPool.${localDbName}`;
+const clearSahPoolOnOpen = consumeSessionFlag(sahPoolRecoveryKey);
 const map = createDemoMap(rdb);
 
 console.info('[local-db] using main-thread ORM sqliteOPFS', {
   localDbName,
   syncUrl,
   sqliteBusyTimeoutMs,
-  sqliteWorker: 'dedicated'
+  sqliteWorker: 'dedicated',
+  clearSahPoolOnOpen
 });
 
+const sqliteOptions = {
+  busyTimeoutMs: sqliteBusyTimeoutMs,
+  sync: {
+    url: syncUrl,
+    auto: false
+  }
+};
+if (clearSahPoolOnOpen)
+  sqliteOptions.opfsSahPool = { clearOnInit: true };
+
 export const db = map({
-  db: (con) => con.sqliteOPFS(localDbName, {
-    busyTimeoutMs: sqliteBusyTimeoutMs,
-    sync: {
-      url: syncUrl,
-      auto: false
-    }
-  }),
+  db: (con) => con.sqliteOPFS(localDbName, sqliteOptions),
   commands: demoCommands
 });
 
@@ -65,6 +72,20 @@ export async function traceSyncOperation(labelOrFn, maybeFn) {
 
 function isLocalSqliteCorruption(error) {
   return /SQLITE_CORRUPT|database disk image is malformed/u.test(error && error.message || String(error));
+}
+
+export function requestSahPoolRecovery() {
+  if (typeof globalThis.sessionStorage !== 'undefined')
+    sessionStorage.setItem(sahPoolRecoveryKey, '1');
+}
+
+function consumeSessionFlag(key) {
+  if (typeof globalThis.sessionStorage === 'undefined')
+    return false;
+  const enabled = sessionStorage.getItem(key) === '1';
+  if (enabled)
+    sessionStorage.removeItem(key);
+  return enabled;
 }
 
 function parsePositiveInteger(value, fallback) {

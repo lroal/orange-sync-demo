@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
-import { bigMode, db, localDbName, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
+import { bigMode, db, localDbName, requestSahPoolRecovery, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
 import rdb from 'orange-orm';
 db.reactive(reactive);
 
@@ -32,10 +32,9 @@ const personStrategy = {
   team: {}
 };
 
-type Projects = Awaited<ReturnType<typeof db.project.proxify>>;
-const projects = shallowRef(db.project.proxify([], projectsStrategy) as unknown as Projects);
-type People = Awaited<ReturnType<typeof db.person.proxify>>;
-const people = shallowRef(db.person.proxify([], personStrategy) as unknown as People);
+
+const projects = shallowRef(db.project.proxify([], projectsStrategy));
+const people = shallowRef(db.person.proxify([], personStrategy));
 const selectedProjectId = ref(null);
 const status = ref('Booting local database');
 const busy = ref(false);
@@ -174,6 +173,7 @@ async function recoverLocalSqliteCorruption(error) {
     return false;
 
   status.value = 'Local SQLite database is corrupt. Recreating local database.';
+  requestSahPoolRecovery();
   try {
     await stopSyncClient();
     if (db && typeof db.close === 'function')
@@ -182,6 +182,14 @@ async function recoverLocalSqliteCorruption(error) {
     setTimeout(() => window.location.reload(), 250);
   }
   catch (e) {
+    if (isNoModificationAllowedError(e)) {
+      console.warn('[local-db] SAH pool is still locked; clearing it on next load', {
+        localDbName,
+        error: e
+      });
+      setTimeout(() => window.location.reload(), 250);
+      return true;
+    }
     console.error('[local-db] failed to delete corrupt SQLite database', {
       localDbName,
       error: e
@@ -195,11 +203,16 @@ function isLocalSqliteCorruption(error) {
   return /SQLITE_CORRUPT|database disk image is malformed/u.test(error && error.message || String(error));
 }
 
+function isNoModificationAllowedError(error) {
+  const errorName = error && typeof error === 'object' && 'name' in error ? error.name : undefined;
+  return errorName === 'NoModificationAllowedError';
+}
+
 async function deleteLocalOpfsDatabase(name) {
   if (!globalThis.navigator || !navigator.storage || typeof navigator.storage.getDirectory !== 'function')
     throw new Error('OPFS is not available.');
   const root = await navigator.storage.getDirectory();
-  await removeOpfsEntry(root, '.opfs-sahpool', { recursive: true });
+  const sahPoolError = await tryRemoveOpfsEntry(root, '.opfs-sahpool', { recursive: true });
   const names = [
     name,
     `${name}-journal`,
@@ -209,17 +222,26 @@ async function deleteLocalOpfsDatabase(name) {
   for (const entryName of names) {
     await removeOpfsEntry(root, entryName);
   }
+  if (sahPoolError)
+    throw sahPoolError;
 }
 
 async function removeOpfsEntry(root, name, options) {
+  const error = await tryRemoveOpfsEntry(root, name, options);
+  if (error)
+    throw error;
+}
+
+async function tryRemoveOpfsEntry(root, name, options) {
   try {
     await root.removeEntry(name, options);
   }
   catch (e) {
     const errorName = e && typeof e === 'object' && 'name' in e ? e.name : undefined;
     if (errorName !== 'NotFoundError')
-      throw e;
+      return e;
   }
+  return null;
 }
 
 async function syncNow() {
@@ -282,7 +304,7 @@ async function bootstrapSyncFromServer() {
 
 async function resetAndBootstrapFromServer({ resetLabel, syncLabel }) {
   await stopSyncClient();
-  await syncOperation(resetLabel, () => db.syncClient.resetLocal({ force: true }));
+  await syncOperation(resetLabel, () => db.syncClient.resetLocal());
   clearLocalView();
   await syncWithTiming(syncLabel);
   lastSync.value = new Date();
@@ -293,7 +315,7 @@ async function resetAndBootstrapFromServer({ resetLabel, syncLabel }) {
 async function resetLocalDatabase() {
   await run('Resetting local database only', async () => {
     await stopSyncClient();
-    await syncOperation('reset local database', () => db.syncClient.resetLocal({ force: true }));
+    await syncOperation('reset local database', () => db.syncClient.resetLocal());
     clearLocalView();
     lastSync.value = null;
     localSchemaResetAttempted = false;

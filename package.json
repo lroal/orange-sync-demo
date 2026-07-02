@@ -15,7 +15,7 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "orange-orm": "github:alfateam/orange-orm#sync_v11_discard_local_changes",
+    "orange-orm": "github:alfateam/orange-orm#sync_v12_reset_local_commands",
     "pg": "^8.21.0"
   }
 }
