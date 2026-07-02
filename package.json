@@ -15,7 +15,7 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "orange-orm": "github:alfateam/orange-orm#sync_v14_opfs_wl_access_lock",
+    "orange-orm": "github:alfateam/orange-orm#sync_v15_reset_local_schema",
     "pg": "^8.21.0"
   }
 }
