@@ -1,12 +1,13 @@
 import rdb from 'orange-orm';
 import { createDemoMap, demoCommands } from '../../shared/schema.js';
 
-const syncUrl = resolveDevServerUrl(import.meta.env.VITE_SYNC_URL || '/rdb', '/rdb');
-const localDbNameOverrideKey = 'orange-sync-demo.localDbNameOverride';
-const configuredLocalDbName = import.meta.env.VITE_SQLITE_DB_NAME || 'orange-sync-demo_vfs2.sqlite3';
+const syncUrl = 'http://localhost:8080/rdb';
+const normalLocalDbName = 'orange-sync-demo_vfs2.sqlite3';
+const bigLocalDbName = 'orange-sync-demo-big2.sqlite3';
+const bigModeEnabled = import.meta.env.VITE_BIG_MODE === '1';
 const sqliteBusyTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SQLITE_BUSY_TIMEOUT_MS, 5000);
-export const localDbName = readLocalDbNameOverride() || configuredLocalDbName;
-export const bigMode = import.meta.env.VITE_BIG_MODE === '1' || localDbName.includes('big');
+export const localDbName = bigModeEnabled ? bigLocalDbName : normalLocalDbName;
+export const bigMode = bigModeEnabled;
 export const syncOperationTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SYNC_OPERATION_TIMEOUT_MS, 300000);
 const map = createDemoMap(rdb);
 
@@ -35,15 +36,6 @@ if (typeof globalThis.addEventListener === 'function') {
   }, { once: true });
 }
 
-export function rotateLocalDbNameForRecovery() {
-  if (typeof localStorage === 'undefined')
-    return null;
-
-  const nextName = addRecoverySuffix(configuredLocalDbName);
-  localStorage.setItem(localDbNameOverrideKey, nextName);
-  return nextName;
-}
-
 export async function traceSyncOperation(labelOrFn, maybeFn) {
   const label = typeof labelOrFn === 'function' ? 'sync operation' : labelOrFn;
   const fn = typeof labelOrFn === 'function' ? labelOrFn : maybeFn;
@@ -65,28 +57,6 @@ export async function traceSyncOperation(labelOrFn, maybeFn) {
     });
     throw e;
   }
-}
-
-function readLocalDbNameOverride() {
-  if (typeof localStorage === 'undefined')
-    return null;
-  return localStorage.getItem(localDbNameOverrideKey);
-}
-
-function addRecoverySuffix(dbName) {
-  const suffix = '-recovered-' + Date.now();
-  return String(dbName).replace(/(\.sqlite3)?$/u, suffix + '$1');
-}
-
-function resolveDevServerUrl(value, path) {
-  if (value && value !== path)
-    return value;
-  if (typeof globalThis.location === 'undefined')
-    return value || path;
-  const { protocol, hostname, port } = globalThis.location;
-  if (port === '5173')
-    return `${protocol}//${hostname}:8080${path}`;
-  return value || path;
 }
 
 function parsePositiveInteger(value, fallback) {

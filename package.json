@@ -15,7 +15,7 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "orange-orm": "github:alfateam/orange-orm#sync_v7_cleanup",
+    "orange-orm": "github:alfateam/orange-orm#sync_v10_sync_api_cleanup",
     "pg": "^8.21.0"
   }
 }

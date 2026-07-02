@@ -62,10 +62,7 @@ function writePrefixed(name, chunk) {
 function getClientEnv() {
   const modeEnv = useBigDb
     ? {
-        VITE_BIG_MODE: '1',
-        VITE_SQLITE_DB_NAME: process.env.VITE_SQLITE_DB_NAME || 'orange-sync-demo-big2.sqlite3',
-        VITE_BIG_PROJECTS: process.env.VITE_BIG_PROJECTS || '5000',
-        VITE_BIG_TASKS_PER_PROJECT: process.env.VITE_BIG_TASKS_PER_PROJECT || '3'
+        VITE_BIG_MODE: '1'
       }
     : {};
 

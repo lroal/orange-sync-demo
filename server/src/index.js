@@ -1,4 +1,3 @@
-import bodyParser from 'body-parser';
 import cors from 'cors';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
@@ -11,17 +10,6 @@ if (process.env.ORANGE_QUERY_LOG === '1')
   rdb.on('query', console.dir);
 
 const require = createRequire(import.meta.url);
-// rdb.on('queryComplete', ({ sql, parameters, elapsedMs, error }) => {
-//   console.dir({
-//     sql: truncateLogValue(sql, 800),
-//     parameters: Array.isArray(parameters)
-//       ? parameters.map((value) => truncateLogValue(value, 160))
-//       : parameters,
-//     elapsedMs,
-//     error
-//   });
-// });
-
 const orangeOrmMain = require.resolve('orange-orm');
 const { setupChangeTracking } = require(path.join(path.dirname(orangeOrmMain), 'sync/setupChangeTracking.js'));
 const port = Number(process.env.PORT || 3055);
@@ -29,14 +17,6 @@ const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl)
   throw new Error('DATABASE_URL is required. Use the devcontainer Postgres service or set DATABASE_URL to a Postgres connection string.');
-
-function truncateLogValue(value, maxLength) {
-  if (typeof value !== 'string')
-    return value;
-  if (value.length <= maxLength)
-    return value;
-  return `${value.slice(0, maxLength)}... <${value.length} chars>`;
-}
 
 const map = createDemoMap(rdb);
 const db = map({
@@ -46,8 +26,6 @@ const db = map({
 })({
   commandHandlers: {
     async addServerTask(db, args) {
-      console.log('serer')
-      console.dir('start servertask');
       const { projectId, title } = args || {};
       if (typeof projectId !== 'string' || !projectId)
         throw new Error('addServerTask requires projectId');
@@ -60,7 +38,6 @@ const db = map({
         done: false,
         sortOrder: 99
       });
-      console.dir({command: args});
       return { created: true };
     }
   }
@@ -111,44 +88,15 @@ app.use(cors({
   origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
   credentials: false
 }));
-app.use(bodyParser.json({ limit: '5mb' }));
+app.use(express.json({ limit: '5mb' }));
 
 app.use((req, _res, next) => {
   console.log(new Date().toISOString() + ' ' + req.method + ' ' + req.originalUrl);
   next();
 });
 
-
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
-});
-
-app.get('/api/snapshot', async (_req, res, next) => {
-  try {
-    const projects = await db.project.getAll({
-      owner: { team: {} },
-      detail: {},
-      tasks: { assignee: {} }
-    });
-    res.json({ projects });
-  }
-  catch (e) {
-    next(e);
-  }
-});
-
-app.post('/api/seed-server-change', async (_req, res, next) => {
-  try {
-    const firstTask = await db.task.getOne(undefined, { orderBy: 'id' });
-    if (firstTask) {
-      firstTask.title = `${firstTask.title.replace(/ \(server\)$/u, '')} (server)`;
-      await firstTask.saveChanges();
-    }
-    res.json({ ok: true });
-  }
-  catch (e) {
-    next(e);
-  }
 });
 
 app.post('/api/seed-big-server', async (req, res, next) => {

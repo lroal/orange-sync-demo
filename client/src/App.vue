@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
-import { bigMode, db, localDbName, rotateLocalDbNameForRecovery, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
+import { bigMode, db, localDbName, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
 import rdb from 'orange-orm';
 db.reactive(reactive);
 
@@ -23,15 +23,14 @@ const status = ref('Booting local database');
 const busy = ref(false);
 const lastSync = ref(null);
 const newTaskTitle = ref('');
-const serverUrl = resolveDevServerUrl(import.meta.env.VITE_SERVER_URL || '', '');
+const serverUrl = 'http://localhost:8080';
 const projectPage = ref(0);
-const projectPageSize = ref(parsePositiveInteger(import.meta.env.VITE_PROJECT_PAGE_SIZE, 25));
+const projectPageSize = ref(25);
 const projectTotal = ref(0);
 const serverBigProfile = ref(import.meta.env.VITE_BIG_SERVER_PROFILE || 'many');
 let localSchemaResetAttempted = false;
 let mounted = false;
 let autoSyncStarted = false;
-const sqliteCorruptionRecoveryKey = 'orange-sync-demo.sqliteCorruptionRecoveryAttempted';
 
 const selectedProject = computed(() =>
   projects.value.find((project) => project.id === selectedProjectId.value) || projects.value[0]
@@ -39,22 +38,6 @@ const selectedProject = computed(() =>
 const projectPageCount = computed(() => Math.max(1, Math.ceil(projectTotal.value / projectPageSize.value)));
 const projectPageStart = computed(() => projectTotal.value === 0 ? 0 : projectPage.value * projectPageSize.value + 1);
 const projectPageEnd = computed(() => Math.min(projectTotal.value, (projectPage.value + 1) * projectPageSize.value));
-
-function parsePositiveInteger(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function resolveDevServerUrl(value, fallback) {
-  if (value && value !== fallback)
-    return value;
-  if (typeof globalThis.location === 'undefined')
-    return value || fallback;
-  const { protocol, hostname, port } = globalThis.location;
-  if (port === '5173')
-    return `${protocol}//${hostname}:8080`;
-  return value || fallback;
-}
 
 onMounted(() => {
   mounted = true;
@@ -68,11 +51,9 @@ onMounted(() => {
   db.syncClient.on('error', ({ error }) => {
     void handleSyncError(error);
   });
-  status.value = 'Starting sync';
-  sessionStorage.removeItem(sqliteCorruptionRecoveryKey);
-  setTimeout(() => {
-    void startSyncClient('auto sync start');
-  }, 0);
+  status.value = 'Preparing local database';
+  busy.value = true;
+  void prepareLocalDatabaseAndStartSync();
 });
 
 onBeforeUnmount(() => {
@@ -127,6 +108,30 @@ async function readProjectTotal() {
   }
 }
 
+async function prepareLocalDatabaseAndStartSync() {
+  try {
+    if (typeof db.syncClient.ensureLocalSchema === 'function') {
+      await syncOperation('prepare local schema', () =>
+        db.syncClient.ensureLocalSchema({ timeoutMs: syncOperationTimeoutMs })
+      );
+    }
+    if (!mounted)
+      return;
+    status.value = 'Starting sync';
+  }
+  catch (e) {
+    if (mounted)
+      await handleSyncError(e);
+    return;
+  }
+  finally {
+    if (mounted)
+      busy.value = false;
+  }
+  if (mounted)
+    void startSyncClient('auto sync start');
+}
+
 async function handleSyncError(error) {
   if (await recoverLocalSyncSchemaMismatch(error))
     return;
@@ -157,20 +162,7 @@ function recoverLocalSqliteCorruption(error) {
   if (!isLocalSqliteCorruption(error))
     return false;
 
-  if (sessionStorage.getItem(sqliteCorruptionRecoveryKey)) {
-    status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
-    return true;
-  }
-
-  const nextDbName = rotateLocalDbNameForRecovery();
-  if (!nextDbName) {
-    status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
-    return true;
-  }
-
-  sessionStorage.setItem(sqliteCorruptionRecoveryKey, '1');
-  status.value = 'Local SQLite database is corrupt. Switching to ' + nextDbName + ' and reloading.';
-  setTimeout(() => window.location.reload(), 250);
+  status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
   return true;
 }
 
@@ -304,11 +296,6 @@ async function toggleTask(task) {
     await run('Saving local task change', async () => {
       task.done = !task.done;
       await projects.value.saveChanges({});
-
-      // const row = await db.task.getById(task.id);
-      // row.done = !row.done;
-      // await row.saveChanges();
-      // await refreshLocal();
     });
   }
   catch(e) {
@@ -349,39 +336,33 @@ async function addServerTaskCommand() {
         projectId: p.id,
         title: `Server command B ${stamp}`
       });
-    
-    const projectId = crypto.randomUUID();
-    const owner = people.value[0];
-    await tx.project.insert({
-      id: projectId,
-      ownerId: owner.id,
-      title: `Local sync test ${stamp}`,
-      status: 'draft',
-      updatedAt: new Date(),
-      detail: {
-        id: crypto.randomUUID(),
-        projectId,
-        summary: 'Created locally. Push sends the patch transaction to Postgres.',
-        riskLevel: 'low'
-      },
-      tasks: [
-        {
+
+      const projectId = crypto.randomUUID();
+      const owner = people.value[0];
+      await tx.project.insert({
+        id: projectId,
+        ownerId: owner.id,
+        title: `Local sync test ${stamp}`,
+        status: 'draft',
+        updatedAt: new Date(),
+        detail: {
           id: crypto.randomUUID(),
           projectId,
-          assigneeId: owner.id,
-          title: 'Push this local task',
-          done: false,
-          sortOrder: 1
-        }
-      ]
+          summary: 'Created locally. Push sends the patch transaction to Postgres.',
+          riskLevel: 'low'
+        },
+        tasks: [
+          {
+            id: crypto.randomUUID(),
+            projectId,
+            assigneeId: owner.id,
+            title: 'Push this local task',
+            done: false,
+            sortOrder: 1
+          }
+        ]
+      });
     });
-
-
-
-    });
-
-
-
 
     lastSync.value = new Date();
     await syncWithTiming('server command sync');
@@ -396,13 +377,6 @@ async function flipStatus() {
     project.status = project.status === 'active' ? 'paused' : 'active';
     project.updatedAt = new Date();
     await projects.value.saveChanges({});
-  });
-}
-
-async function createServerChange() {
-  await run('Creating server-side change', async () => {
-    await fetch(`${serverUrl}/api/seed-server-change`, { method: 'POST' });
-    await syncWithTiming('server change sync');
   });
 }
 
@@ -504,7 +478,6 @@ async function run(message, fn) {
         </div>
         <button v-if="bigMode" @click="seedBigServerDatabase" :disabled="busy"><span class="icon">B</span> Seed server + bootstrap sync</button>
         <button v-if="bigMode" @click="bootstrapSyncFromServer" :disabled="busy"><span class="icon">P</span> Bootstrap sync</button>
-        <button @click="createServerChange" :disabled="busy"><span class="icon">S</span> Server edit</button>
         <button @click="resetLocalDatabase" :disabled="busy"><span class="icon">X</span> Reset local only</button>
       </div>
     </aside>
