@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
-import { bigMode, db, localDbName, requestSahPoolRecovery, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
+import { bigMode, db, localDbName, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
 db.reactive(reactive);
 
 const projectPage = ref(0);
@@ -132,8 +132,6 @@ async function prepareLocalDatabaseAndStartSync() {
 async function handleSyncError(error) {
   if (await recoverLocalSyncSchemaMismatch(error))
     return;
-  if (await recoverLocalSqliteCorruption(error))
-    return;
   status.value = error.message || String(error);
 }
 
@@ -153,82 +151,6 @@ async function recoverLocalSyncSchemaMismatch(error) {
 
 function isLocalSyncSchemaMismatch(error) {
   return /Local sync schema does not match current map/u.test(error && error.message || String(error));
-}
-
-async function recoverLocalSqliteCorruption(error) {
-  if (!isLocalSqliteCorruption(error))
-    return false;
-
-  status.value = 'Local SQLite database is corrupt. Recreating local database.';
-  requestSahPoolRecovery();
-  try {
-    await stopSyncClient();
-    if (db && typeof db.close === 'function')
-      await db.close();
-    await deleteLocalOpfsDatabase(localDbName);
-    setTimeout(() => window.location.reload(), 250);
-  }
-  catch (e) {
-    if (isNoModificationAllowedError(e)) {
-      console.warn('[local-db] SAH pool is still locked; clearing it on next load', {
-        localDbName,
-        error: e
-      });
-      setTimeout(() => window.location.reload(), 250);
-      return true;
-    }
-    console.error('[local-db] failed to delete corrupt SQLite database', {
-      localDbName,
-      error: e
-    });
-    status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
-  }
-  return true;
-}
-
-function isLocalSqliteCorruption(error) {
-  return /SQLITE_CORRUPT|database disk image is malformed/u.test(error && error.message || String(error));
-}
-
-function isNoModificationAllowedError(error) {
-  const errorName = error && typeof error === 'object' && 'name' in error ? error.name : undefined;
-  return errorName === 'NoModificationAllowedError';
-}
-
-async function deleteLocalOpfsDatabase(name) {
-  if (!globalThis.navigator || !navigator.storage || typeof navigator.storage.getDirectory !== 'function')
-    throw new Error('OPFS is not available.');
-  const root = await navigator.storage.getDirectory();
-  const sahPoolError = await tryRemoveOpfsEntry(root, '.opfs-sahpool', { recursive: true });
-  const names = [
-    name,
-    `${name}-journal`,
-    `${name}-wal`,
-    `${name}-shm`
-  ];
-  for (const entryName of names) {
-    await removeOpfsEntry(root, entryName);
-  }
-  if (sahPoolError)
-    throw sahPoolError;
-}
-
-async function removeOpfsEntry(root, name, options) {
-  const error = await tryRemoveOpfsEntry(root, name, options);
-  if (error)
-    throw error;
-}
-
-async function tryRemoveOpfsEntry(root, name, options) {
-  try {
-    await root.removeEntry(name, options);
-  }
-  catch (e) {
-    const errorName = e && typeof e === 'object' && 'name' in e ? e.name : undefined;
-    if (errorName !== 'NotFoundError')
-      return e;
-  }
-  return null;
 }
 
 async function syncNow() {
@@ -497,8 +419,6 @@ async function run(message, fn) {
   }
   catch (e) {
     if (await recoverLocalSyncSchemaMismatch(e))
-      return;
-    if (await recoverLocalSqliteCorruption(e))
       return;
     status.value = e.message || String(e);
   }
