@@ -1,20 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
 import { bigMode, db, localDbName, requestSahPoolRecovery, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
-import rdb from 'orange-orm';
 db.reactive(reactive);
-
-rdb.on('sqliteOpen', ({ connectionString, filename, requestedVfs, vfs, fallback, readonly }) => {
-  console.info('[sqliteOPFS] open', {
-    connectionString,
-    filename,
-    requestedVfs,
-    vfs,
-    fallback,
-    readonly,
-    localDbName
-  });
-});
 
 const projectPage = ref(0);
 const projectPageSize = ref(25);

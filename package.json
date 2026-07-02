@@ -15,7 +15,7 @@
     "install:all": "npm install"
   },
   "dependencies": {
-    "orange-orm": "github:alfateam/orange-orm#sync_v15_reset_local_schema",
+    "orange-orm": "github:alfateam/orange-orm#sync_v16_remove_sqlite_open_event",
     "pg": "^8.21.0"
   }
 }
