@@ -50,13 +50,21 @@ export async function traceSyncOperation(labelOrFn, maybeFn) {
     return result;
   }
   catch (e) {
-    console.error('[sync-trace] failed', {
+    const payload = {
       label,
       elapsedMs: Math.round(performance.now() - startedAt),
       error: e
-    });
+    };
+    if (isLocalSqliteCorruption(e))
+      console.warn('[sync-trace] local SQLite corruption detected', payload);
+    else
+      console.error('[sync-trace] failed', payload);
     throw e;
   }
+}
+
+function isLocalSqliteCorruption(error) {
+  return /SQLITE_CORRUPT|database disk image is malformed/u.test(error && error.message || String(error));
 }
 
 function parsePositiveInteger(value, fallback) {

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
 import { bigMode, db, localDbName, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
 import rdb from 'orange-orm';
@@ -16,16 +16,32 @@ rdb.on('sqliteOpen', ({ connectionString, filename, requestedVfs, vfs, fallback,
   });
 });
 
-const projects = shallowRef([]);
-const people = shallowRef([]);
+const projectPage = ref(0);
+const projectPageSize = ref(25);
+const projectsStrategy = {
+  owner: {
+    team: {}
+  },
+  detail: {},
+  tasks: {
+    assignee: {}
+  },
+};
+
+const personStrategy = {
+  team: {}
+};
+
+type Projects = Awaited<ReturnType<typeof db.project.proxify>>;
+const projects = shallowRef(db.project.proxify([], projectsStrategy) as unknown as Projects);
+type People = Awaited<ReturnType<typeof db.person.proxify>>;
+const people = shallowRef(db.person.proxify([], personStrategy) as unknown as People);
 const selectedProjectId = ref(null);
 const status = ref('Booting local database');
 const busy = ref(false);
 const lastSync = ref(null);
 const newTaskTitle = ref('');
 const serverUrl = 'http://localhost:8080';
-const projectPage = ref(0);
-const projectPageSize = ref(25);
 const projectTotal = ref(0);
 const serverBigProfile = ref(import.meta.env.VITE_BIG_SERVER_PROFILE || 'many');
 let localSchemaResetAttempted = false;
@@ -41,12 +57,9 @@ const projectPageEnd = computed(() => Math.min(projectTotal.value, (projectPage.
 
 onMounted(() => {
   mounted = true;
-  db.syncClient.on('pull', async () => {
+  db.syncClient.on('sync', async () => {
     lastSync.value = new Date();
     await refreshLocal();
-  });
-  db.syncClient.on('push', () => {
-    lastSync.value = new Date();
   });
   db.syncClient.on('error', ({ error }) => {
     void handleSyncError(error);
@@ -67,20 +80,20 @@ async function refreshLocal() {
     clearLocalView();
     return;
   }
+
   projectTotal.value = total;
   const maxPage = Math.max(0, Math.ceil(total / projectPageSize.value) - 1);
   if (projectPage.value > maxPage)
     projectPage.value = maxPage;
   const [fetchedProjectRows, personRows] = await Promise.all([
-    db.project.getAll({
-      owner: { team: {} },
-      detail: {},
-      tasks: { assignee: {}, orderBy: 'sortOrder' },
+    db.project.getMany({
+      ...projectsStrategy,
+      tasks: { ...projectsStrategy.tasks, orderBy: 'sortOrder' },
       orderBy: 'id',
       limit: projectPageSize.value,
       offset: projectPage.value * projectPageSize.value
     }),
-    db.person.getAll({ team: {}, orderBy: 'name' })
+    db.person.getMany({ ...personStrategy, orderBy: 'name' })
   ]);
 
   projects.value = fetchedProjectRows;
@@ -93,9 +106,7 @@ async function refreshLocal() {
 
 async function readProjectTotal() {
   try {
-    const rows = await db.query('SELECT COUNT(*) AS count FROM "project"');
-    const row = Array.isArray(rows) ? rows[0] : rows?.rows?.[0];
-    const total = Number(row?.count ?? row?.COUNT ?? 0);
+    const total = await db.project.count();
     console.info('[local-db] project count', { total, localDbName });
     return { total, missingLocalSchema: false };
   }
@@ -135,7 +146,7 @@ async function prepareLocalDatabaseAndStartSync() {
 async function handleSyncError(error) {
   if (await recoverLocalSyncSchemaMismatch(error))
     return;
-  if (recoverLocalSqliteCorruption(error))
+  if (await recoverLocalSqliteCorruption(error))
     return;
   status.value = error.message || String(error);
 }
@@ -158,16 +169,57 @@ function isLocalSyncSchemaMismatch(error) {
   return /Local sync schema does not match current map/u.test(error && error.message || String(error));
 }
 
-function recoverLocalSqliteCorruption(error) {
+async function recoverLocalSqliteCorruption(error) {
   if (!isLocalSqliteCorruption(error))
     return false;
 
-  status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
+  status.value = 'Local SQLite database is corrupt. Recreating local database.';
+  try {
+    await stopSyncClient();
+    if (db && typeof db.close === 'function')
+      await db.close();
+    await deleteLocalOpfsDatabase(localDbName);
+    setTimeout(() => window.location.reload(), 250);
+  }
+  catch (e) {
+    console.error('[local-db] failed to delete corrupt SQLite database', {
+      localDbName,
+      error: e
+    });
+    status.value = 'Local SQLite database is corrupt. Clear site data for this origin, then reload.';
+  }
   return true;
 }
 
 function isLocalSqliteCorruption(error) {
   return /SQLITE_CORRUPT|database disk image is malformed/u.test(error && error.message || String(error));
+}
+
+async function deleteLocalOpfsDatabase(name) {
+  if (!globalThis.navigator || !navigator.storage || typeof navigator.storage.getDirectory !== 'function')
+    throw new Error('OPFS is not available.');
+  const root = await navigator.storage.getDirectory();
+  await removeOpfsEntry(root, '.opfs-sahpool', { recursive: true });
+  const names = [
+    name,
+    `${name}-journal`,
+    `${name}-wal`,
+    `${name}-shm`
+  ];
+  for (const entryName of names) {
+    await removeOpfsEntry(root, entryName);
+  }
+}
+
+async function removeOpfsEntry(root, name, options) {
+  try {
+    await root.removeEntry(name, options);
+  }
+  catch (e) {
+    const errorName = e && typeof e === 'object' && 'name' in e ? e.name : undefined;
+    if (errorName !== 'NotFoundError')
+      throw e;
+  }
 }
 
 async function syncNow() {
@@ -249,8 +301,8 @@ async function resetLocalDatabase() {
 }
 
 function clearLocalView() {
-  projects.value = [];
-  people.value = [];
+  projects.value.splice(0, projects.value.length);
+  people.value.splice(0, people.value.length);
   selectedProjectId.value = null;
   projectPage.value = 0;
   projectTotal.value = 0;
@@ -298,7 +350,7 @@ async function toggleTask(task) {
       await projects.value.saveChanges({});
     });
   }
-  catch(e) {
+  catch (e) {
     status.value = e.message || String(e);
   }
 }
@@ -437,7 +489,7 @@ async function run(message, fn) {
   catch (e) {
     if (await recoverLocalSyncSchemaMismatch(e))
       return;
-    if (recoverLocalSqliteCorruption(e))
+    if (await recoverLocalSqliteCorruption(e))
       return;
     status.value = e.message || String(e);
   }
@@ -472,12 +524,17 @@ async function run(message, fn) {
         <button @click="syncNow" :disabled="busy"><span class="icon">R</span> Sync</button>
         <button @click="reloadLocal" :disabled="busy"><span class="icon">L</span> Refresh UI</button>
         <div v-if="bigMode" class="segmented">
-          <button :class="{ active: serverBigProfile === 'many' }" @click="setServerBigProfile('many')" :disabled="busy">Many</button>
-          <button :class="{ active: serverBigProfile === 'wide' }" @click="setServerBigProfile('wide')" :disabled="busy">Wide</button>
-          <button :class="{ active: serverBigProfile === 'mixed' }" @click="setServerBigProfile('mixed')" :disabled="busy">Mixed</button>
+          <button :class="{ active: serverBigProfile === 'many' }" @click="setServerBigProfile('many')"
+            :disabled="busy">Many</button>
+          <button :class="{ active: serverBigProfile === 'wide' }" @click="setServerBigProfile('wide')"
+            :disabled="busy">Wide</button>
+          <button :class="{ active: serverBigProfile === 'mixed' }" @click="setServerBigProfile('mixed')"
+            :disabled="busy">Mixed</button>
         </div>
-        <button v-if="bigMode" @click="seedBigServerDatabase" :disabled="busy"><span class="icon">B</span> Seed server + bootstrap sync</button>
-        <button v-if="bigMode" @click="bootstrapSyncFromServer" :disabled="busy"><span class="icon">P</span> Bootstrap sync</button>
+        <button v-if="bigMode" @click="seedBigServerDatabase" :disabled="busy"><span class="icon">B</span> Seed server +
+          bootstrap sync</button>
+        <button v-if="bigMode" @click="bootstrapSyncFromServer" :disabled="busy"><span class="icon">P</span> Bootstrap
+          sync</button>
         <button @click="resetLocalDatabase" :disabled="busy"><span class="icon">X</span> Reset local only</button>
       </div>
     </aside>
@@ -488,7 +545,8 @@ async function run(message, fn) {
           <p class="eyebrow">Projects</p>
           <h2>Two-way sync workspace</h2>
         </div>
-        <button class="primary" @click="createProject" :disabled="busy"><span class="icon">+</span> New local project</button>
+        <button class="primary" @click="createProject" :disabled="busy"><span class="icon">+</span> New local
+          project</button>
       </header>
 
       <div class="grid">
@@ -499,12 +557,8 @@ async function run(message, fn) {
             <button @click="nextProjectPage" :disabled="busy || projectPage + 1 >= projectPageCount">Next</button>
           </div>
 
-          <button
-            v-for="project in projects"
-            :key="project.id"
-            :class="{ active: selectedProject?.id === project.id }"
-            @click="selectedProjectId = project.id"
-          >
+          <button v-for="project in projects" :key="project.id" :class="{ active: selectedProject?.id === project.id }"
+            @click="selectedProjectId = project.id">
             <strong>{{ project.title }}</strong>
             <span>{{ project.owner?.name || 'No owner' }} · {{ project.status }}</span>
           </button>
@@ -545,12 +599,7 @@ async function run(message, fn) {
               <button @click="addTask" :disabled="busy || !newTaskTitle.trim()">+</button>
             </div>
 
-            <button
-              v-for="task in selectedProject.tasks || []"
-              :key="task.id"
-              class="task"
-              @click="toggleTask(task)"
-            >
+            <button v-for="task in selectedProject.tasks || []" :key="task.id" class="task" @click="toggleTask(task)">
               <span class="check" :class="{ done: task.done }">✓</span>
               <span>
                 <strong>{{ task.title }}</strong>
