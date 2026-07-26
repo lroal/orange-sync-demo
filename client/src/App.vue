@@ -1,7 +1,45 @@
 <script setup lang="ts">
+import rdb from 'orange-orm';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
-import { bigMode, db, localDbName, syncOperationTimeoutMs, traceSyncOperation } from './db.js';
+import { bigMode, db, localDbName, syncOperationTimeoutMs } from './db.js';
+import {
+  sqlDiagnosticsEnabled,
+  sqlDiagnosticsSlowMs,
+  syncDiagnosticsEnabled,
+  syncPullApplyMaxRowsPerTransaction,
+  syncPullApplyYieldMs,
+  syncPullMaxConcurrentRowRequests,
+  syncPullMaxKeysPerBatch,
+  syncPullMaxRowsPerBatch
+} from './dbConfig.js';
 db.reactive(reactive);
+
+type ActiveOperation = {
+  id: number;
+  key: string;
+  message: string;
+};
+
+type SyncPhase = 'keys' | 'rows' | 'push' | 'unknown';
+
+type SyncDiagnosticsRequest = {
+  id: number;
+  phase: SyncPhase;
+  itemCount: number;
+  startedAt: number;
+};
+
+type SyncDiagnosticsSummary = {
+  label: string;
+  totalMs: number;
+  networkWallMs: number;
+  nonNetworkMs: number;
+  maxActiveRows: number;
+  keysRequests: number;
+  rowsRequests: number;
+  rowItems: number;
+  keyItems: number;
+};
 
 const projectPage = ref(0);
 const projectPageSize = ref(25);
@@ -24,15 +62,18 @@ const projects = shallowRef(db.project.proxify([], projectsStrategy));
 const people = shallowRef(db.person.proxify([], personStrategy));
 const selectedProjectId = ref(null);
 const status = ref('Booting local database');
-const busy = ref(false);
+const activeOperations = ref<ActiveOperation[]>([]);
 const lastSync = ref(null);
+const lastBootstrapSyncMs = ref<number | null>(null);
+const lastBootstrapDiagnostics = ref<SyncDiagnosticsSummary | null>(null);
 const newTaskTitle = ref('');
 const serverUrl = 'http://localhost:8080';
 const projectTotal = ref(0);
 const serverBigProfile = ref(import.meta.env.VITE_BIG_SERVER_PROFILE || 'many');
-let localSchemaResetAttempted = false;
-let mounted = false;
-let autoSyncStarted = false;
+let stopSyncEventListeners = () => {};
+let nextOperationId = 1;
+let syncDiagnosticsRequestId = 1;
+let currentSyncDiagnostics: ReturnType<typeof beginSyncDiagnostics> | null = null;
 
 const selectedProject = computed(() =>
   projects.value.find((project) => project.id === selectedProjectId.value) || projects.value[0]
@@ -40,47 +81,98 @@ const selectedProject = computed(() =>
 const projectPageCount = computed(() => Math.max(1, Math.ceil(projectTotal.value / projectPageSize.value)));
 const projectPageStart = computed(() => projectTotal.value === 0 ? 0 : projectPage.value * projectPageSize.value + 1);
 const projectPageEnd = computed(() => Math.min(projectTotal.value, (projectPage.value + 1) * projectPageSize.value));
+const runningOperationCount = computed(() => activeOperations.value.length);
 
 onMounted(() => {
-  mounted = true;
-  db.syncClient.on('sync', async () => {
-    lastSync.value = new Date();
-    await refreshLocal();
+  const stopDiagnostics = installSyncDiagnostics();
+  const stopSqlDiagnostics = installLocalSqlDiagnostics();
+  const offSync = db.syncClient.on('sync', (event) => {
+    console.info('[sync-event] sync', event);
+    void refreshAfterSync();
   });
-  db.syncClient.on('error', ({ error }) => {
-    void handleSyncError(error);
+  const offError = db.syncClient.on('error', (event) => {
+    console.error('[sync-event] error', event);
+    setErrorStatus(event && event.error || event);
   });
-  status.value = 'Preparing local database';
-  busy.value = true;
-  void prepareLocalDatabaseAndStartSync();
+  stopSyncEventListeners = () => {
+    stopSqlDiagnostics();
+    stopDiagnostics();
+    offSync();
+    offError();
+    stopSyncEventListeners = () => {};
+  };
+  void run('prepare-local', 'Preparing local database', async () => {
+    // await db.syncClient.ensureLocalSchema({ timeoutMs: syncOperationTimeoutMs });
+    status.value = 'Starting sync';
+    await startSyncClient();
+  });
 });
 
 onBeforeUnmount(() => {
-  mounted = false;
+  stopSyncEventListeners();
   void stopSyncClient();
 });
 
-async function refreshLocal() {
-  const { total, missingLocalSchema } = await readProjectTotal();
-  if (missingLocalSchema) {
-    clearLocalView();
-    return;
+async function refreshAfterSync() {
+  lastSync.value = new Date();
+  try {
+    await refreshLocal();
+    setIdleStatus();
   }
+  catch (e) {
+    console.error('[sync-event] refresh failed', e);
+    setErrorStatus(e);
+  }
+}
 
+function setErrorStatus(error) {
+  status.value = errorMessage(error);
+}
+
+function errorMessage(error) {
+  return error && error.message || String(error);
+}
+
+function formatElapsed(ms: number | null) {
+  if (ms === null)
+    return '';
+  if (ms < 1000)
+    return `${ms}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+async function refreshLocal() {
+  const refreshStartedAt = performance.now();
+  const countStartedAt = performance.now();
+  const total = await readProjectTotal();
+  const countMs = Math.round(performance.now() - countStartedAt);
   projectTotal.value = total;
   const maxPage = Math.max(0, Math.ceil(total / projectPageSize.value) - 1);
   if (projectPage.value > maxPage)
     projectPage.value = maxPage;
-  const [fetchedProjectRows, personRows] = await Promise.all([
-    db.project.getMany({
+  const projectStartedAt = performance.now();
+  const projectRowsPromise = db.project.getMany({
       ...projectsStrategy,
       tasks: { ...projectsStrategy.tasks, orderBy: 'sortOrder' },
       orderBy: 'id',
       limit: projectPageSize.value,
       offset: projectPage.value * projectPageSize.value
-    }),
-    db.person.getMany({ ...personStrategy, orderBy: 'name' })
+    }).then((rows) => ({
+      rows,
+      elapsedMs: Math.round(performance.now() - projectStartedAt)
+    }));
+  const peopleStartedAt = performance.now();
+  const personRowsPromise = db.person.getMany({ ...personStrategy, orderBy: 'name' })
+    .then((rows) => ({
+      rows,
+      elapsedMs: Math.round(performance.now() - peopleStartedAt)
+    }));
+  const [projectResult, peopleResult] = await Promise.all([
+    projectRowsPromise,
+    personRowsPromise
   ]);
+  const fetchedProjectRows = projectResult.rows;
+  const personRows = peopleResult.rows;
 
   projects.value = fetchedProjectRows;
   people.value = personRows;
@@ -88,81 +180,31 @@ async function refreshLocal() {
     selectedProjectId.value = null;
   if (!selectedProjectId.value && projects.value.length > 0)
     selectedProjectId.value = projects.value[0].id;
+  console.info(
+    '[ui-refresh]',
+    `totalMs=${Math.round(performance.now() - refreshStartedAt)}`,
+    `countMs=${countMs}`,
+    `projectsMs=${projectResult.elapsedMs}`,
+    `peopleMs=${peopleResult.elapsedMs}`,
+    `projects=${fetchedProjectRows.length}`,
+    `people=${personRows.length}`,
+    `total=${total}`,
+    `page=${projectPage.value + 1}/${projectPageCount.value}`
+  );
 }
 
 async function readProjectTotal() {
-  try {
-    const total = await db.project.count();
-    console.info('[local-db] project count', { total, localDbName });
-    return { total, missingLocalSchema: false };
-  }
-  catch (e) {
-    if (/no such table/u.test(e && e.message || String(e))) {
-      console.info('[local-db] project table missing', { localDbName, error: e && e.message || String(e) });
-      return { total: 0, missingLocalSchema: true };
-    }
-    throw e;
-  }
-}
-
-async function prepareLocalDatabaseAndStartSync() {
-  try {
-    if (typeof db.syncClient.ensureLocalSchema === 'function') {
-      await syncOperation('prepare local schema', () =>
-        db.syncClient.ensureLocalSchema({ timeoutMs: syncOperationTimeoutMs })
-      );
-    }
-    if (!mounted)
-      return;
-    status.value = 'Starting sync';
-  }
-  catch (e) {
-    if (mounted)
-      await handleSyncError(e);
-    return;
-  }
-  finally {
-    if (mounted)
-      busy.value = false;
-  }
-  if (mounted)
-    void startSyncClient('auto sync start');
-}
-
-async function handleSyncError(error) {
-  if (await recoverLocalSyncSchemaMismatch(error))
-    return;
-  status.value = error.message || String(error);
-}
-
-async function recoverLocalSyncSchemaMismatch(error) {
-  if (!isLocalSyncSchemaMismatch(error) || localSchemaResetAttempted)
-    return false;
-  localSchemaResetAttempted = true;
-  await run('Recovering local sync schema', async () => {
-    await resetAndBootstrapFromServer({
-      resetLabel: 'schema recovery local reset',
-      syncLabel: 'schema recovery bootstrap sync'
-    });
-    localSchemaResetAttempted = false;
-  });
-  return true;
-}
-
-function isLocalSyncSchemaMismatch(error) {
-  return /Local sync schema does not match current map/u.test(error && error.message || String(error));
+  return await db.project.count();
 }
 
 async function syncNow() {
-  await run('Syncing changes', async () => {
-    await syncWithTiming('manual sync');
-    lastSync.value = new Date();
-    await refreshLocal();
+  await run('sync-now', 'Syncing changes', async () => {
+    await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
   });
 }
 
 async function reloadLocal() {
-  await run('Refreshing local data', async () => {
+  await run('reload-local', 'Refreshing local data', async () => {
     await refreshLocal();
   });
 }
@@ -182,19 +224,17 @@ async function nextProjectPage() {
 }
 
 async function seedBigServerDatabase() {
-  await run(`Seeding ${serverBigProfile.value} server data and bootstrapping`, async () => {
+  const profile = serverBigProfile.value;
+  await run('seed-big-server', `Seeding ${profile} server data and bootstrapping`, async () => {
     const response = await fetch(`${serverUrl}/api/seed-big-server`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile: serverBigProfile.value })
+      body: JSON.stringify({ profile })
     });
     if (!response.ok)
       throw new Error(`Server big seed failed with status ${response.status}`);
     await response.json();
-    await resetAndBootstrapFromServer({
-      resetLabel: 'seed server local reset',
-      syncLabel: 'seeded server bootstrap sync'
-    });
+    await resetAndBootstrapFromServer();
   });
 }
 
@@ -203,31 +243,34 @@ function setServerBigProfile(profile) {
 }
 
 async function bootstrapSyncFromServer() {
-  await run('Bootstrapping local database from existing server data', async () => {
-    await resetAndBootstrapFromServer({
-      resetLabel: 'bootstrap local reset',
-      syncLabel: 'bootstrap sync'
-    });
+  await run('bootstrap-sync', 'Bootstrapping local database from existing server data', async () => {
+    await resetAndBootstrapFromServer();
   });
 }
 
-async function resetAndBootstrapFromServer({ resetLabel, syncLabel }) {
+async function resetAndBootstrapFromServer() {
   await stopSyncClient();
-  await syncOperation(resetLabel, () => db.syncClient.resetLocal());
+  await db.syncClient.resetLocal();
   clearLocalView();
-  await syncWithTiming(syncLabel);
-  lastSync.value = new Date();
-  await refreshLocal();
-  await startSyncClient('post-bootstrap sync start');
+  const diagnostics = beginSyncDiagnostics('bootstrap');
+  const bootstrapStartedAt = performance.now();
+  try {
+    await startSyncClient();
+  }
+  finally {
+    lastBootstrapSyncMs.value = Math.round(performance.now() - bootstrapStartedAt);
+    const summary = diagnostics.finish(lastBootstrapSyncMs.value);
+    lastBootstrapDiagnostics.value = summary;
+    console.info('[bootstrap-sync]', `${lastBootstrapSyncMs.value}ms`, summary);
+  }
 }
 
 async function resetLocalDatabase() {
-  await run('Resetting local database only', async () => {
+  await run('reset-local', 'Resetting local database only', async () => {
     await stopSyncClient();
-    await syncOperation('reset local database', () => db.syncClient.resetLocal());
+    await db.syncClient.resetLocal();
     clearLocalView();
     lastSync.value = null;
-    localSchemaResetAttempted = false;
   });
 }
 
@@ -243,7 +286,7 @@ async function createProject() {
   const owner = people.value[0];
   if (!owner)
     return;
-  await run('Creating local project', async () => {
+  await run('create-project', 'Creating local project', async () => {
     const stamp = new Date().toLocaleTimeString();
     const projectId = crypto.randomUUID();
     const project = await db.project.insert({
@@ -275,22 +318,29 @@ async function createProject() {
 }
 
 async function toggleTask(task) {
-  try {
-    await run('Saving local task change', async () => {
-      task.done = !task.done;
-      await projects.value.saveChanges({});
-    });
-  }
-  catch (e) {
-    status.value = e.message || String(e);
-  }
+  await run(taskToggleKey(task), 'Saving local task change', async () => {
+    task.done = !task.done;
+    await projects.value.saveChanges({});
+  });
+}
+
+async function deleteTask(task) {
+  await run(taskDeleteKey(task), 'Deleting local task', async () => {
+    const project = selectedProject.value;
+    const tasks = project?.tasks || [];
+    const index = tasks.findIndex((row) => row.id === task.id);
+    if (index === -1)
+      return;
+    tasks.splice(index, 1);
+    await projects.value.saveChanges({});
+  });
 }
 
 async function addTask() {
   const project = selectedProject.value;
   if (!project || !newTaskTitle.value.trim())
     return;
-  await run('Adding local task', async () => {
+  await run('add-task', 'Adding local task', async () => {
     await db.task.insert({
       id: crypto.randomUUID(),
       projectId: project.id,
@@ -306,11 +356,11 @@ async function addTask() {
 
 async function addServerTaskCommand() {
   const p = selectedProject.value;
-  if (!p)
+  if (!p || !people.value[0])
     return;
-  await run('Running server commands', async () => {
+  await run('server-commands', 'Running server commands', async () => {
     const stamp = new Date().toLocaleTimeString();
-    await db.transaction(async (tx) => {
+    await db.transaction(async (tx, ct) => {
       await tx.commands.addServerTask({
         projectId: p.id,
         title: `Server command A ${stamp}`
@@ -322,7 +372,7 @@ async function addServerTaskCommand() {
 
       const projectId = crypto.randomUUID();
       const owner = people.value[0];
-      await tx.project.insert({
+      const pr = await tx.project.insert({
         id: projectId,
         ownerId: owner.id,
         title: `Local sync test ${stamp}`,
@@ -334,6 +384,7 @@ async function addServerTaskCommand() {
           summary: 'Created locally. Push sends the patch transaction to Postgres.',
           riskLevel: 'low'
         },
+        
         tasks: [
           {
             id: crypto.randomUUID(),
@@ -345,10 +396,17 @@ async function addServerTaskCommand() {
           }
         ]
       });
+      ct.memory = pr;
+      ct.context.row = pr;
+      ct.context.operation = 'foo';
+      ct.context.bar = {bar: 1};
     });
-
+    db.syncClient.once('operation:foo', (e) => {
+      console.dir('operation')
+      console.dir(e);
+    });
     lastSync.value = new Date();
-    await syncWithTiming('server command sync');
+    await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
   });
 }
 
@@ -356,74 +414,229 @@ async function flipStatus() {
   const project = selectedProject.value;
   if (!project)
     return;
-  await run('Saving local project change', async () => {
+  await run('flip-status', 'Saving local project change', async () => {
     project.status = project.status === 'active' ? 'paused' : 'active';
     project.updatedAt = new Date();
     await projects.value.saveChanges({});
   });
 }
 
-async function syncWithTiming(label) {
-  const startedAt = performance.now();
-  try {
-    return await syncOperation(label, () => db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs }));
-  }
-  finally {
-    console.info(`[timing] ${label} took ${(performance.now() - startedAt).toFixed(1)} ms`);
-  }
-}
-
-async function syncOperation(label, fn) {
-  return await withTimeout(traceSyncOperation(label, fn), syncOperationTimeoutMs, label);
-}
-
-async function startSyncClient(label) {
-  if (autoSyncStarted)
-    return;
-  autoSyncStarted = true;
-  try {
-    await withTimeout(db.syncClient.start(), Math.min(syncOperationTimeoutMs, 15000), label);
-    if (mounted)
-      status.value = 'Idle';
-  }
-  catch (e) {
-    autoSyncStarted = false;
-    if (mounted)
-      await handleSyncError(e);
-  }
+async function startSyncClient() {
+  await db.syncClient.start();
+  setIdleStatus();
 }
 
 async function stopSyncClient() {
-  autoSyncStarted = false;
-  if (typeof db.syncClient.stop === 'function')
-    await db.syncClient.stop();
+  await db.syncClient.stop();
 }
 
-function withTimeout(promise, timeoutMs, label) {
-  let timeoutId;
-  const timeout = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`${label} did not finish within ${Math.round(timeoutMs / 1000)} seconds.`));
-    }, timeoutMs);
+function installSyncDiagnostics() {
+  if (!syncDiagnosticsEnabled)
+    return () => {};
+
+  const requestId = db.syncClient.interceptors.request.use((config) => {
+    const body = config?.data;
+    const phase = syncPhase(body?.phase || body?.action);
+    if (phase === 'unknown')
+      return config;
+
+    const request: SyncDiagnosticsRequest = {
+      id: syncDiagnosticsRequestId++,
+      phase,
+      itemCount: Array.isArray(body?.items)
+        ? body.items.length
+        : Array.isArray(body?.mutations)
+          ? body.mutations.length
+          : 0,
+      startedAt: performance.now()
+    };
+
+    config.__orangeSyncDiagnostics = request;
+    currentSyncDiagnostics?.startRequest(request);
+    return config;
   });
-  return Promise.race([promise, timeout])
-    .finally(() => clearTimeout(timeoutId));
+
+  const responseId = db.syncClient.interceptors.response.use(
+    (response) => {
+      finishDiagnosticsRequest(response?.config?.__orangeSyncDiagnostics, response?.data, false);
+      return response;
+    },
+    (error) => {
+      finishDiagnosticsRequest(error?.config?.__orangeSyncDiagnostics, undefined, true);
+      throw error;
+    }
+  );
+
+  return () => {
+    db.syncClient.interceptors.request.eject(requestId);
+    db.syncClient.interceptors.response.eject(responseId);
+  };
 }
 
-async function run(message, fn) {
-  busy.value = true;
+function installLocalSqlDiagnostics() {
+  if (!sqlDiagnosticsEnabled)
+    return () => {};
+  const onQueryComplete = (entry) => {
+    if (!entry || Number(entry.elapsedMs || 0) < sqlDiagnosticsSlowMs)
+      return;
+    console.info(
+      '[ui-sql]',
+      `${Math.round(entry.elapsedMs)}ms`,
+      entry.workerElapsedMs === undefined ? '' : `worker=${Math.round(entry.workerElapsedMs)}ms`,
+      entry.lane || '',
+      summarizeSql(entry.sql)
+    );
+  };
+  rdb.on('queryComplete', onQueryComplete);
+  return () => rdb.off('queryComplete', onQueryComplete);
+}
+
+function summarizeSql(sql) {
+  return String(sql || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+}
+
+function finishDiagnosticsRequest(request: SyncDiagnosticsRequest | undefined, payload, failed: boolean) {
+  if (!request)
+    return;
+  currentSyncDiagnostics?.finishRequest(request, payload, failed);
+}
+
+function beginSyncDiagnostics(label: string) {
+  const startedAt = performance.now();
+  let activeRows = 0;
+  let maxActiveRows = 0;
+  let firstNetworkStartedAt: number | null = null;
+  let lastNetworkEndedAt: number | null = null;
+  let keysRequests = 0;
+  let rowsRequests = 0;
+  let keyItems = 0;
+  let rowItems = 0;
+  let finished = false;
+
+  const diagnostics = {
+    startRequest(request: SyncDiagnosticsRequest) {
+      if (finished)
+        return;
+      if (firstNetworkStartedAt === null || request.startedAt < firstNetworkStartedAt)
+        firstNetworkStartedAt = request.startedAt;
+      if (request.phase === 'rows') {
+        activeRows += 1;
+        maxActiveRows = Math.max(maxActiveRows, activeRows);
+      }
+    },
+    finishRequest(request: SyncDiagnosticsRequest, payload, failed: boolean) {
+      if (finished)
+        return;
+      const endedAt = performance.now();
+      lastNetworkEndedAt = Math.max(lastNetworkEndedAt || endedAt, endedAt);
+      const elapsedMs = Math.round(endedAt - request.startedAt);
+      const responseItems = Array.isArray(payload?.items) ? payload.items.length : 0;
+
+      if (request.phase === 'keys') {
+        keysRequests += 1;
+        keyItems += responseItems;
+      }
+      else if (request.phase === 'rows') {
+        rowsRequests += 1;
+        rowItems += request.itemCount;
+        activeRows = Math.max(0, activeRows - 1);
+      }
+
+      console.info(
+        '[sync-request]',
+        label,
+        request.phase,
+        failed ? 'failed' : 'ok',
+        `${elapsedMs}ms`,
+        `items=${request.itemCount}`,
+        `returned=${responseItems}`,
+        `activeRows=${activeRows}`,
+        `maxActiveRows=${maxActiveRows}`
+      );
+    },
+    finish(totalMs?: number): SyncDiagnosticsSummary {
+      finished = true;
+      if (currentSyncDiagnostics === diagnostics)
+        currentSyncDiagnostics = null;
+      const finalTotalMs = totalMs ?? Math.round(performance.now() - startedAt);
+      const networkWallMs = firstNetworkStartedAt === null || lastNetworkEndedAt === null
+        ? 0
+        : Math.round(lastNetworkEndedAt - firstNetworkStartedAt);
+      return {
+        label,
+        totalMs: finalTotalMs,
+        networkWallMs,
+        nonNetworkMs: Math.max(0, finalTotalMs - networkWallMs),
+        maxActiveRows,
+        keysRequests,
+        rowsRequests,
+        rowItems,
+        keyItems
+      };
+    }
+  };
+
+  currentSyncDiagnostics = diagnostics;
+  console.info('[sync-diagnostics]', label, {
+    maxConcurrentRowRequests: formatConfigValue(syncPullMaxConcurrentRowRequests),
+    maxKeysPerBatch: formatConfigValue(syncPullMaxKeysPerBatch),
+    maxRowsPerBatch: formatConfigValue(syncPullMaxRowsPerBatch),
+    applyMaxRowsPerTransaction: syncPullApplyMaxRowsPerTransaction,
+    applyYieldMs: syncPullApplyYieldMs
+  });
+  return diagnostics;
+}
+
+function syncPhase(value): SyncPhase {
+  if (value === 'keys' || value === 'rows' || value === 'push')
+    return value;
+  return 'unknown';
+}
+
+function formatConfigValue(value: number | undefined) {
+  return value || 'default';
+}
+
+function taskToggleKey(task) {
+  return `toggle-task-${task.id}`;
+}
+
+function taskDeleteKey(task) {
+  return `delete-task-${task.id}`;
+}
+
+function setIdleStatus() {
+  if (activeOperations.value.length === 0)
+    status.value = 'Idle';
+}
+
+function updateStatusFromActiveOperations() {
+  const activeOperation = activeOperations.value[activeOperations.value.length - 1];
+  if (activeOperation)
+    status.value = activeOperation.message;
+}
+
+async function run(key, message, fn) {
+  const id = nextOperationId++;
+  const startedAt = performance.now();
+  activeOperations.value = [...activeOperations.value, { id, key, message }];
   status.value = message;
+  let failed = false;
   try {
     await fn();
-    status.value = 'Idle';
   }
   catch (e) {
-    if (await recoverLocalSyncSchemaMismatch(e))
-      return;
-    status.value = e.message || String(e);
+    failed = true;
+    setErrorStatus(e);
   }
   finally {
-    busy.value = false;
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    console.info('[operation]', key, failed ? 'failed' : 'completed', `${elapsedMs}ms`);
+    activeOperations.value = activeOperations.value.filter((operation) => operation.id !== id);
+    if (activeOperations.value.length > 0)
+      updateStatusFromActiveOperations();
+    else if (!failed)
+      status.value = 'Idle';
   }
 }
 </script>
@@ -446,25 +659,43 @@ async function run(message, fn) {
         </div>
         <p v-if="lastSync">Last sync {{ lastSync.toLocaleTimeString() }}</p>
         <p v-else>Waiting for first sync</p>
+        <p v-if="lastBootstrapSyncMs !== null">Last bootstrap {{ formatElapsed(lastBootstrapSyncMs) }}</p>
+        <p v-if="lastBootstrapDiagnostics">
+          rows max {{ lastBootstrapDiagnostics.maxActiveRows }} · rows req {{ lastBootstrapDiagnostics.rowsRequests }} · net {{ formatElapsed(lastBootstrapDiagnostics.networkWallMs) }} · other {{ formatElapsed(lastBootstrapDiagnostics.nonNetworkMs) }}
+        </p>
+        <p v-if="runningOperationCount">
+          {{ runningOperationCount }} operation{{ runningOperationCount === 1 ? '' : 's' }} running
+        </p>
         <p>{{ localDbName }}</p>
+        <p v-if="bigMode">
+          rows concurrency {{ formatConfigValue(syncPullMaxConcurrentRowRequests) }} · keys batch {{ formatConfigValue(syncPullMaxKeysPerBatch) }} · rows batch {{ formatConfigValue(syncPullMaxRowsPerBatch) }}
+        </p>
+        <p v-if="bigMode">
+          apply rows/tx {{ syncPullApplyMaxRowsPerTransaction }} · yield {{ syncPullApplyYieldMs }}ms
+        </p>
       </section>
 
       <div class="actions">
-        <button @click="syncNow" :disabled="busy"><span class="icon">R</span> Sync</button>
-        <button @click="reloadLocal" :disabled="busy"><span class="icon">L</span> Refresh UI</button>
+        <button @click="syncNow">
+          <span class="icon">R</span> Sync
+        </button>
+        <button @click="reloadLocal">
+          <span class="icon">L</span> Refresh UI
+        </button>
         <div v-if="bigMode" class="segmented">
-          <button :class="{ active: serverBigProfile === 'many' }" @click="setServerBigProfile('many')"
-            :disabled="busy">Many</button>
-          <button :class="{ active: serverBigProfile === 'wide' }" @click="setServerBigProfile('wide')"
-            :disabled="busy">Wide</button>
-          <button :class="{ active: serverBigProfile === 'mixed' }" @click="setServerBigProfile('mixed')"
-            :disabled="busy">Mixed</button>
+          <button :class="{ active: serverBigProfile === 'many' }" @click="setServerBigProfile('many')">Many</button>
+          <button :class="{ active: serverBigProfile === 'wide' }" @click="setServerBigProfile('wide')">Wide</button>
+          <button :class="{ active: serverBigProfile === 'mixed' }" @click="setServerBigProfile('mixed')">Mixed</button>
         </div>
-        <button v-if="bigMode" @click="seedBigServerDatabase" :disabled="busy"><span class="icon">B</span> Seed server +
-          bootstrap sync</button>
-        <button v-if="bigMode" @click="bootstrapSyncFromServer" :disabled="busy"><span class="icon">P</span> Bootstrap
-          sync</button>
-        <button @click="resetLocalDatabase" :disabled="busy"><span class="icon">X</span> Reset local only</button>
+        <button v-if="bigMode" @click="seedBigServerDatabase">
+          <span class="icon">B</span> Seed server + bootstrap sync
+        </button>
+        <button v-if="bigMode" @click="bootstrapSyncFromServer">
+          <span class="icon">P</span> Bootstrap sync
+        </button>
+        <button @click="resetLocalDatabase">
+          <span class="icon">X</span> Reset local only
+        </button>
       </div>
     </aside>
 
@@ -474,16 +705,28 @@ async function run(message, fn) {
           <p class="eyebrow">Projects</p>
           <h2>Two-way sync workspace</h2>
         </div>
-        <button class="primary" @click="createProject" :disabled="busy"><span class="icon">+</span> New local
-          project</button>
+        <button
+          class="primary"
+          @click="createProject"
+        >
+          <span class="icon">+</span> New local project
+        </button>
       </header>
 
       <div class="grid">
         <nav class="project-list">
           <div class="pager">
-            <button @click="previousProjectPage" :disabled="busy || projectPage === 0">Prev</button>
+            <button
+              @click="previousProjectPage"
+            >
+              Prev
+            </button>
             <span>{{ projectPageStart }}-{{ projectPageEnd }} / {{ projectTotal }}</span>
-            <button @click="nextProjectPage" :disabled="busy || projectPage + 1 >= projectPageCount">Next</button>
+            <button
+              @click="nextProjectPage"
+            >
+              Next
+            </button>
           </div>
 
           <button v-for="project in projects" :key="project.id" :class="{ active: selectedProject?.id === project.id }"
@@ -500,8 +743,14 @@ async function run(message, fn) {
               <h3>{{ selectedProject.title }}</h3>
             </div>
             <div class="detail-actions">
-              <button @click="flipStatus" :disabled="busy">Toggle status</button>
-              <button @click="addServerTaskCommand" :disabled="busy">Server commands</button>
+              <button @click="flipStatus">
+                Toggle status
+              </button>
+              <button
+                @click="addServerTaskCommand"
+              >
+                Server commands
+              </button>
             </div>
           </div>
 
@@ -525,16 +774,29 @@ async function run(message, fn) {
           <section class="tasks">
             <div class="task-input">
               <input v-model="newTaskTitle" placeholder="Add a local task" @keydown.enter="addTask" />
-              <button @click="addTask" :disabled="busy || !newTaskTitle.trim()">+</button>
+              <button
+                @click="addTask"
+              >
+                +
+              </button>
             </div>
 
-            <button v-for="task in selectedProject.tasks || []" :key="task.id" class="task" @click="toggleTask(task)">
-              <span class="check" :class="{ done: task.done }">✓</span>
-              <span>
-                <strong>{{ task.title }}</strong>
-                <small>{{ task.assignee?.name || 'Unassigned' }}</small>
-              </span>
-            </button>
+            <div
+              v-for="task in selectedProject.tasks || []"
+              :key="task.id"
+              class="task"
+            >
+              <button class="task-toggle" @click="toggleTask(task)">
+                <span class="check" :class="{ done: task.done }">✓</span>
+                <span>
+                  <strong>{{ task.title }}</strong>
+                  <small>{{ task.assignee?.name || 'Unassigned' }}</small>
+                </span>
+              </button>
+              <button class="danger icon-button" title="Delete row" aria-label="Delete row" @click="deleteTask(task)">
+                X
+              </button>
+            </div>
           </section>
         </article>
 

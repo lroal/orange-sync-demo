@@ -54,6 +54,15 @@ The project list is paged so the UI only reads one page from local SQLite at a t
 
 Use browser network throttling to simulate low bandwidth; the demo does not add artificial server delay or change sync batch sizes for these profiles.
 
+Bootstrap sync diagnostics are logged in the browser console and summarized in the sidebar. The demo uses Orange ORM pull defaults unless these optional overrides are set:
+
+```bash
+VITE_SYNC_PULL_MAX_CONCURRENT_ROW_REQUESTS=8 npm run dev:big
+VITE_SYNC_PULL_MAX_KEYS_PER_BATCH=4000 npm run dev:big
+VITE_SYNC_PULL_MAX_ROWS_PER_BATCH=250 npm run dev:big
+VITE_SYNC_DIAGNOSTICS=0 npm run dev:big
+```
+
 ## Model
 
 Relations included:
@@ -66,7 +75,7 @@ Relations included:
 - `task.project`: `references`
 - `task.assignee`: `references`
 
-The browser client currently runs ORM and sync from the UI thread against `sqliteOPFS` with the `opfs-sahpool` VFS. SQLite/OPFS itself still runs in its required dedicated worker. When the UI is opened on Vite port 5173, sync push/pull uses nginx on `http://localhost:8080/rdb`.
+The browser client uses Orange ORM directly against `sqliteOPFS`. SQLite itself still runs through the Orange ORM OPFS worker client, while ORM and sync orchestration stay in the app thread for now. When the UI is opened on Vite port 5173, sync push/pull uses nginx on `http://localhost:8080/rdb`.
 
 ## TODO
 

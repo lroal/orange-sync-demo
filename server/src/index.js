@@ -5,9 +5,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import rdb from 'orange-orm';
 import { createDemoMap, demoCommands, demoDbOptions } from '../../shared/schema.js';
+import e from 'cors';
 
-if (process.env.ORANGE_QUERY_LOG === '1')
-  rdb.on('query', console.dir);
 
 const require = createRequire(import.meta.url);
 const orangeOrmMain = require.resolve('orange-orm');
@@ -112,9 +111,7 @@ app.post('/api/seed-big-server', async (req, res, next) => {
 
 app.use('/rdb', logSyncTiming);
 app.use('/rdb', db.express({
-  sync: {
-    queue: { concurrency: 10, maxPending: 100 }
-  }
+  sync: {}
 }));
 
 app.use((err, _req, res, _next) => {
@@ -137,7 +134,7 @@ server.on("error", (err) => {
 });
 
 function createDatabase(con) {
-  return con.pg(databaseUrl, { size: 4 });
+  return con.pg(databaseUrl, { size: 10 });
 }
 
 function logSyncTiming(req, res, next) {

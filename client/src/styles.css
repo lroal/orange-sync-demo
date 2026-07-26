@@ -30,11 +30,6 @@ button {
   cursor: pointer;
 }
 
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
 .shell {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
@@ -128,7 +123,8 @@ button:disabled {
 .actions button,
 .primary,
 .detail-head button,
-.task-input button {
+.task-input button,
+.icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -289,6 +285,13 @@ button:disabled {
 
 .task {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: center;
+}
+
+.task-toggle {
+  display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
@@ -297,10 +300,27 @@ button:disabled {
   border-radius: 8px;
 }
 
-.task span:last-child {
+.task-toggle span:last-child {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.icon-button {
+  width: 44px;
+  height: 100%;
+  min-height: 52px;
+  padding: 0;
+  font-weight: 800;
+}
+
+.danger {
+  border-color: rgba(131, 31, 31, 0.28);
+  color: #831f1f;
+}
+
+.danger:hover {
+  background: #f8e7e4;
 }
 
 .task strong,
