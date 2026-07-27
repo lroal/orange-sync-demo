@@ -483,6 +483,7 @@ function installLocalSqlDiagnostics() {
       `${Math.round(entry.elapsedMs)}ms`,
       entry.workerElapsedMs === undefined ? '' : `worker=${Math.round(entry.workerElapsedMs)}ms`,
       entry.lane || '',
+      entry.connectionString || '',
       summarizeSql(entry.sql)
     );
   };

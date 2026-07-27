@@ -17,6 +17,8 @@ import {
 console.dir({
   bigMode,
   localDbName,
+  sqliteSingleWorker: false,
+  syncWorkerSqliteSingleWorker: true,
   sqliteBusyTimeoutMs,
   syncOperationTimeoutMs,
   syncPullApplyMaxRowsPerTransaction,
@@ -32,6 +34,7 @@ const map = createDemoMap(rdb);
 
 const sqliteOptions = {
   busyTimeoutMs: sqliteBusyTimeoutMs,
+  singleWorker: false,
   sync: {
     url: syncUrl,
     auto: false,
@@ -48,6 +51,11 @@ const sqliteOptions = {
   }
 };
 
+const syncWorkerSqliteOptions = {
+  ...sqliteOptions,
+  singleWorker: true
+};
+
 const sqliteWorker = rdb.createSqliteOPFSWorker({
   connectionString: localDbName,
   ...sqliteOptions
@@ -57,7 +65,7 @@ const syncWorker = new Worker(new URL('./sync.worker.js', import.meta.url), { ty
 syncWorker.postMessage({
   type: 'orange-sync-demo-init',
   localDbName,
-  sqliteOptions,
+  sqliteOptions: syncWorkerSqliteOptions,
   sqlPort: syncSqlPort
 }, [syncSqlPort]);
 const syncClient = rdb.createSyncWorkerClient(syncWorker);
