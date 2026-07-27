@@ -102,9 +102,8 @@ onMounted(() => {
     stopSyncEventListeners = () => {};
   };
   void run('prepare-local', 'Preparing local database', async () => {
-    // await db.syncClient.ensureLocalSchema({ timeoutMs: syncOperationTimeoutMs });
-    status.value = 'Starting sync';
-    await startSyncClient();
+    await db.syncClient.ensureLocalSchema({ timeoutMs: syncOperationTimeoutMs });
+    await refreshLocal();
   });
 });
 
@@ -422,7 +421,7 @@ async function flipStatus() {
 }
 
 async function startSyncClient() {
-  await db.syncClient.start();
+  await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
   setIdleStatus();
 }
 
