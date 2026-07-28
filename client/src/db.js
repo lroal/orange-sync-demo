@@ -32,6 +32,15 @@ console.dir({
 
 const map = createDemoMap(rdb);
 
+const syncPullApply = syncPullApplyMaxRowsPerTransaction
+  ? {
+      apply: {
+        maxRowsPerTransaction: syncPullApplyMaxRowsPerTransaction,
+        yieldMs: syncPullApplyYieldMs
+      }
+    }
+  : {};
+
 const sqliteOptions = {
   busyTimeoutMs: sqliteBusyTimeoutMs,
   singleWorker: false,
@@ -43,10 +52,7 @@ const sqliteOptions = {
       ...(syncPullMaxConcurrentRowRequests ? { maxConcurrentRowRequests: syncPullMaxConcurrentRowRequests } : {}),
       ...(syncPullMaxKeysPerBatch ? { maxKeysPerBatch: syncPullMaxKeysPerBatch } : {}),
       ...(syncPullMaxRowsPerBatch ? { maxRowsPerBatch: syncPullMaxRowsPerBatch } : {}),
-      apply: {
-        maxRowsPerTransaction: syncPullApplyMaxRowsPerTransaction,
-        yieldMs: syncPullApplyYieldMs
-      }
+      ...syncPullApply
     }
   }
 };

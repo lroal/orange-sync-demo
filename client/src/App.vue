@@ -581,8 +581,7 @@ function beginSyncDiagnostics(label: string) {
     maxConcurrentRowRequests: formatConfigValue(syncPullMaxConcurrentRowRequests),
     maxKeysPerBatch: formatConfigValue(syncPullMaxKeysPerBatch),
     maxRowsPerBatch: formatConfigValue(syncPullMaxRowsPerBatch),
-    applyMaxRowsPerTransaction: syncPullApplyMaxRowsPerTransaction,
-    applyYieldMs: syncPullApplyYieldMs
+    apply: formatApplyConfig()
   });
   return diagnostics;
 }
@@ -595,6 +594,12 @@ function syncPhase(value): SyncPhase {
 
 function formatConfigValue(value: number | undefined) {
   return value || 'default';
+}
+
+function formatApplyConfig() {
+  return syncPullApplyMaxRowsPerTransaction
+    ? `${syncPullApplyMaxRowsPerTransaction} rows/tx · yield ${syncPullApplyYieldMs}ms`
+    : 'single transaction';
 }
 
 function taskToggleKey(task) {
@@ -671,7 +676,7 @@ async function run(key, message, fn) {
           rows concurrency {{ formatConfigValue(syncPullMaxConcurrentRowRequests) }} · keys batch {{ formatConfigValue(syncPullMaxKeysPerBatch) }} · rows batch {{ formatConfigValue(syncPullMaxRowsPerBatch) }}
         </p>
         <p v-if="bigMode">
-          apply rows/tx {{ syncPullApplyMaxRowsPerTransaction }} · yield {{ syncPullApplyYieldMs }}ms
+          apply {{ formatApplyConfig() }}
         </p>
       </section>
 

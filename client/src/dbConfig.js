@@ -8,7 +8,7 @@ export const syncOperationTimeoutMs = parsePositiveInteger(import.meta.env.VITE_
 export const syncPullMaxConcurrentRowRequests = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_MAX_CONCURRENT_ROW_REQUESTS);
 export const syncPullMaxKeysPerBatch = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_MAX_KEYS_PER_BATCH);
 export const syncPullMaxRowsPerBatch = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_MAX_ROWS_PER_BATCH);
-export const syncPullApplyMaxRowsPerTransaction = parsePositiveInteger(import.meta.env.VITE_SYNC_PULL_APPLY_MAX_ROWS_PER_TRANSACTION, 100);
+export const syncPullApplyMaxRowsPerTransaction = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_APPLY_MAX_ROWS_PER_TRANSACTION);
 export const syncPullApplyYieldMs = parseNonNegativeInteger(import.meta.env.VITE_SYNC_PULL_APPLY_YIELD_MS, 0);
 export const syncDiagnosticsEnabled = import.meta.env.VITE_SYNC_DIAGNOSTICS !== '0';
 export const sqlDiagnosticsEnabled = import.meta.env.VITE_SQL_DIAGNOSTICS !== '0';
