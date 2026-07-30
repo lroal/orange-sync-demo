@@ -62,15 +62,31 @@ const localDbConnectionStrings = [
   appendDualDbSuffix(localDbName, 'b'),
   appendDualDbSuffix(localDbName, 'delta')
 ];
+const sqliteSahPoolByConnectionString = new Map(
+  localDbConnectionStrings.map((connectionString) => [
+    connectionString,
+    createIsolatedSahPoolOptions(connectionString)
+  ])
+);
 const sqliteWorkerByConnectionString = new Map(
   localDbConnectionStrings.map((connectionString) => [
     connectionString,
     rdb.createSqliteOPFSWorker({
       connectionString,
-      ...sqliteWorkerOptions
+      ...sqliteWorkerOptions,
+      opfsSahPool: sqliteSahPoolByConnectionString.get(connectionString)
     })
   ])
 );
+for (const connectionString of localDbConnectionStrings) {
+  const sahPool = sqliteSahPoolByConnectionString.get(connectionString);
+  console.info(
+    '[sqlite-worker]',
+    connectionString,
+    `sahPool=${sahPool.name}`,
+    `directory=${sahPool.directory}`
+  );
+}
 const sqliteOptions = {
   ...sqliteWorkerOptions,
   createWorker: getSqliteWorker
@@ -118,4 +134,22 @@ function appendDualDbSuffix(connectionString, suffix) {
   if (value.endsWith('.db'))
     return value.slice(0, -3) + `.__orange_sync_${suffix}.db`;
   return `${value}.__orange_sync_${suffix}.sqlite3`;
+}
+
+function createIsolatedSahPoolOptions(connectionString) {
+  const token = stableHash(connectionString);
+  return {
+    name: `orange-sync-demo-${token}`,
+    directory: `.orange-sync-demo-${token}`
+  };
+}
+
+function stableHash(value) {
+  const text = String(value);
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
