@@ -24,10 +24,18 @@ self.onmessage = (event) => {
 
 function initialize(message) {
   const map = createDemoMap(rdb);
+  const sqlPortByConnectionString = new Map(
+    (message.sqlConnections || []).map(({ connectionString, port }) => [connectionString, port])
+  );
   const db = map({
     db: (con) => con.sqliteOPFS(message.localDbName, {
       ...message.sqliteOptions,
-      worker: message.sqlPort,
+      createWorker(connectionString) {
+        const port = sqlPortByConnectionString.get(connectionString);
+        if (!port)
+          throw new Error(`No shared sqliteOPFS port configured for "${connectionString}".`);
+        return port;
+      },
       closeDbOnClose: false
     }),
     commands: demoCommands
@@ -36,7 +44,8 @@ function initialize(message) {
   installSyncHttpDiagnostics(db.syncClient);
   handler = rdb.createSyncWorkerHandler(db.syncClient);
   console.info('[sync-worker]', 'initialized', message.localDbName, {
-    apply: message.sqliteOptions?.sync?.pull?.apply
+    apply: message.sqliteOptions?.sync?.pull?.apply,
+    sqlConnections: Array.from(sqlPortByConnectionString.keys())
   });
   while (pendingEvents.length > 0)
     void handler.handleMessage(pendingEvents.shift());

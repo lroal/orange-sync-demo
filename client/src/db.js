@@ -41,7 +41,7 @@ const syncPullApply = syncPullApplyMaxRowsPerTransaction
     }
   : {};
 
-const sqliteOptions = {
+const sqliteWorkerOptions = {
   busyTimeoutMs: sqliteBusyTimeoutMs,
   singleWorker: true,
   sync: {
@@ -57,23 +57,40 @@ const sqliteOptions = {
   }
 };
 
+const localDbConnectionStrings = [
+  localDbName,
+  appendDualDbSuffix(localDbName, 'b'),
+  appendDualDbSuffix(localDbName, 'delta')
+];
+const sqliteWorkerByConnectionString = new Map(
+  localDbConnectionStrings.map((connectionString) => [
+    connectionString,
+    rdb.createSqliteOPFSWorker({
+      connectionString,
+      ...sqliteWorkerOptions
+    })
+  ])
+);
+const sqliteOptions = {
+  ...sqliteWorkerOptions,
+  createWorker: getSqliteWorker
+};
 const syncWorkerSqliteOptions = {
-  ...sqliteOptions,
+  ...sqliteWorkerOptions,
   singleWorker: true
 };
 
-const sqliteWorker = rdb.createSqliteOPFSWorker({
-  connectionString: localDbName,
-  ...sqliteOptions
-});
-const syncSqlPort = rdb.connectSqliteOPFSWorker(sqliteWorker);
+const syncSqlConnections = localDbConnectionStrings.map((connectionString) => ({
+  connectionString,
+  port: rdb.connectSqliteOPFSWorker(getSqliteWorker(connectionString))
+}));
 const syncWorker = new Worker(new URL('./sync.worker.js', import.meta.url), { type: 'module' });
 syncWorker.postMessage({
   type: 'orange-sync-demo-init',
   localDbName,
   sqliteOptions: syncWorkerSqliteOptions,
-  sqlPort: syncSqlPort
-}, [syncSqlPort]);
+  sqlConnections: syncSqlConnections
+}, syncSqlConnections.map(({ port }) => port));
 const syncClient = rdb.createSyncWorkerClient(syncWorker);
 
 
@@ -81,9 +98,24 @@ export { bigMode, localDbName, syncOperationTimeoutMs };
 
 export const db = map({
   db: (con) => con.sqliteOPFS(localDbName, {
-    ...sqliteOptions,
-    worker: sqliteWorker
+    ...sqliteOptions
   }),
   syncClient,
   commands: demoCommands
 });
+
+function getSqliteWorker(connectionString) {
+  const worker = sqliteWorkerByConnectionString.get(connectionString);
+  if (!worker)
+    throw new Error(`No shared sqliteOPFS worker configured for "${connectionString}".`);
+  return worker;
+}
+
+function appendDualDbSuffix(connectionString, suffix) {
+  const value = String(connectionString);
+  if (value.endsWith('.sqlite3'))
+    return value.slice(0, -8) + `.__orange_sync_${suffix}.sqlite3`;
+  if (value.endsWith('.db'))
+    return value.slice(0, -3) + `.__orange_sync_${suffix}.db`;
+  return `${value}.__orange_sync_${suffix}.sqlite3`;
+}
