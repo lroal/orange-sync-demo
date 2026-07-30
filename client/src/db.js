@@ -17,7 +17,7 @@ import {
 console.dir({
   bigMode,
   localDbName,
-  sqliteSingleWorker: false,
+  sqliteSingleWorker: true,
   syncWorkerSqliteSingleWorker: true,
   sqliteBusyTimeoutMs,
   syncOperationTimeoutMs,
@@ -43,7 +43,7 @@ const syncPullApply = syncPullApplyMaxRowsPerTransaction
 
 const sqliteOptions = {
   busyTimeoutMs: sqliteBusyTimeoutMs,
-  singleWorker: false,
+  singleWorker: true,
   sync: {
     url: syncUrl,
     auto: false,
