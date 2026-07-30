@@ -198,7 +198,8 @@ async function readProjectTotal() {
 
 async function syncNow() {
   await run('sync-now', 'Syncing changes', async () => {
-    await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
+    const result = await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
+    logDualRouting('sync', result);
   });
 }
 
@@ -249,7 +250,8 @@ async function bootstrapSyncFromServer() {
 
 async function resetAndBootstrapFromServer() {
   await stopSyncClient();
-  await db.syncClient.resetLocal();
+  const resetResult = await db.syncClient.resetLocal();
+  logDualRouting('reset', resetResult);
   clearLocalView();
   const diagnostics = beginSyncDiagnostics('bootstrap');
   const bootstrapStartedAt = performance.now();
@@ -267,7 +269,8 @@ async function resetAndBootstrapFromServer() {
 async function resetLocalDatabase() {
   await run('reset-local', 'Resetting local database only', async () => {
     await stopSyncClient();
-    await db.syncClient.resetLocal();
+    const result = await db.syncClient.resetLocal();
+    logDualRouting('reset', result);
     clearLocalView();
     lastSync.value = null;
   });
@@ -421,7 +424,8 @@ async function flipStatus() {
 }
 
 async function startSyncClient() {
-  await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
+  const result = await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
+  logDualRouting('sync', result);
   setIdleStatus();
 }
 
@@ -493,6 +497,18 @@ function installLocalSqlDiagnostics() {
 
 function summarizeSql(sql) {
   return String(sql || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+}
+
+function logDualRouting(operation, result) {
+  const info = result?.__orangeDualSync || result;
+  if (!info || !info.activeRole || !info.stagingRole)
+    return;
+  console.info(
+    '[dual-routing]',
+    operation,
+    `active=${info.activeRole}`,
+    `staging=${info.stagingRole}`
+  );
 }
 
 function finishDiagnosticsRequest(request: SyncDiagnosticsRequest | undefined, payload, failed: boolean) {
