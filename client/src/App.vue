@@ -642,6 +642,7 @@ async function run(key, message, fn) {
   const startedAt = performance.now();
   activeOperations.value = [...activeOperations.value, { id, key, message }];
   status.value = message;
+  console.info('[operation]', key, 'started');
   let failed = false;
   try {
     await fn();

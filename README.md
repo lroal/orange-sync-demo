@@ -75,7 +75,13 @@ Relations included:
 - `task.project`: `references`
 - `task.assignee`: `references`
 
-The browser client uses Orange ORM directly against `sqliteOPFS`. SQLite itself still runs through the Orange ORM OPFS worker client, while ORM and sync orchestration stay in the app thread for now. When the UI is opened on Vite port 5173, sync push/pull uses nginx on `http://localhost:8080/rdb`.
+The browser client uses Orange ORM directly against `sqliteOPFS`. UI-side ORM work stays in the app thread, sync orchestration runs in a dedicated sync worker, and SQLite access is shared through the Orange ORM OPFS workers. When the UI is opened on Vite port 5173, sync push/pull uses nginx on `http://localhost:8080/rdb`.
+
+## Background Sync
+
+The sync worker starts an initial sync when it is initialized and then syncs every second. Local ORM/patch writes, including status toggles, task edits, inserts and deletes, are recorded in the local outbox and pushed by the next background sync. The `R Sync` button remains available for an immediate manual sync.
+
+Set `VITE_SYNC_AUTO_INTERVAL_MS` to override the one-second interval. A value of `0` disables the timer while retaining the initial sync and online-event sync.
 
 ## TODO
 
