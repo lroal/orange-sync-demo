@@ -18,6 +18,7 @@ import {
 console.dir({
   bigMode,
   localDbName,
+  sqliteVfs: 'opfs-wl',
   sqliteSingleWorker: true,
   syncWorkerSqliteSingleWorker: true,
   sqliteBusyTimeoutMs,
@@ -46,11 +47,16 @@ const syncPullApply = syncPullApplyMaxRowsPerTransaction
 const sqliteWorkerOptions = {
   busyTimeoutMs: sqliteBusyTimeoutMs,
   singleWorker: true,
+  vfs: 'opfs-wl',
   sync: {
     url: syncUrl,
     auto: {
       enabled: true,
       intervalMs: syncAutoIntervalMs
+    },
+
+    push: {
+      maxMutationsPerBatch: 50
     },
 
     pull: {
@@ -67,29 +73,20 @@ const localDbConnectionStrings = [
   appendDualDbSuffix(localDbName, 'b'),
   appendDualDbSuffix(localDbName, 'delta')
 ];
-const sqliteSahPoolByConnectionString = new Map(
-  localDbConnectionStrings.map((connectionString) => [
-    connectionString,
-    createIsolatedSahPoolOptions(connectionString)
-  ])
-);
 const sqliteWorkerByConnectionString = new Map(
   localDbConnectionStrings.map((connectionString) => [
     connectionString,
     rdb.createSqliteOPFSWorker({
       connectionString,
-      ...sqliteWorkerOptions,
-      opfsSahPool: sqliteSahPoolByConnectionString.get(connectionString)
+      ...sqliteWorkerOptions
     })
   ])
 );
 for (const connectionString of localDbConnectionStrings) {
-  const sahPool = sqliteSahPoolByConnectionString.get(connectionString);
   console.info(
     '[sqlite-worker]',
     connectionString,
-    `sahPool=${sahPool.name}`,
-    `directory=${sahPool.directory}`
+    'vfs=opfs-wl'
   );
 }
 const sqliteOptions = {
@@ -125,6 +122,48 @@ export const db = map({
   commands: demoCommands
 });
 
+let closePromise;
+
+export function closeDemoDatabase() {
+  if (closePromise)
+    return closePromise;
+  closePromise = (async () => {
+    try {
+      await syncClient.stop();
+    }
+    catch (_error) {
+      // Continue closing the workers even if an active sync did not stop cleanly.
+    }
+    syncClient.close();
+    try {
+      await db.close();
+    }
+    finally {
+      for (const worker of sqliteWorkerByConnectionString.values())
+        worker.terminate();
+    }
+  })();
+  return closePromise;
+}
+
+const onPageHide = () => {
+  void closeDemoDatabase();
+};
+const onPageShow = (event) => {
+  if (event.persisted)
+    globalThis.location?.reload();
+};
+globalThis.addEventListener?.('pagehide', onPageHide, { once: true });
+globalThis.addEventListener?.('pageshow', onPageShow);
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    globalThis.removeEventListener?.('pagehide', onPageHide);
+    globalThis.removeEventListener?.('pageshow', onPageShow);
+    void closeDemoDatabase();
+  });
+}
+
 function getSqliteWorker(connectionString) {
   const worker = sqliteWorkerByConnectionString.get(connectionString);
   if (!worker)
@@ -139,22 +178,4 @@ function appendDualDbSuffix(connectionString, suffix) {
   if (value.endsWith('.db'))
     return value.slice(0, -3) + `.__orange_sync_${suffix}.db`;
   return `${value}.__orange_sync_${suffix}.sqlite3`;
-}
-
-function createIsolatedSahPoolOptions(connectionString) {
-  const token = stableHash(connectionString);
-  return {
-    name: `orange-sync-demo-${token}`,
-    directory: `.orange-sync-demo-${token}`
-  };
-}
-
-function stableHash(value) {
-  const text = String(value);
-  let hash = 2166136261;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
 }

@@ -5,7 +5,7 @@ export const bigMode = import.meta.env.VITE_BIG_MODE === '1';
 export const localDbName = bigMode ? bigLocalDbName : normalLocalDbName;
 export const sqliteBusyTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SQLITE_BUSY_TIMEOUT_MS, 5000);
 export const syncOperationTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SYNC_OPERATION_TIMEOUT_MS, 300000);
-export const syncAutoIntervalMs = parseNonNegativeInteger(import.meta.env.VITE_SYNC_AUTO_INTERVAL_MS, 1000);
+export const syncAutoIntervalMs = parseNonNegativeInteger(import.meta.env.VITE_SYNC_AUTO_INTERVAL_MS, 5000);
 export const syncPullMaxConcurrentRowRequests = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_MAX_CONCURRENT_ROW_REQUESTS);
 export const syncPullMaxKeysPerBatch = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_MAX_KEYS_PER_BATCH);
 export const syncPullMaxRowsPerBatch = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_MAX_ROWS_PER_BATCH);

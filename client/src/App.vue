@@ -74,6 +74,9 @@ let stopSyncEventListeners = () => {};
 let nextOperationId = 1;
 let syncDiagnosticsRequestId = 1;
 let currentSyncDiagnostics: ReturnType<typeof beginSyncDiagnostics> | null = null;
+let refreshAfterSyncPromise: Promise<void> | null = null;
+let refreshAfterSyncRequested = false;
+const workerSyncDiagnosticsRequests = new Map<number, SyncDiagnosticsRequest>();
 
 const selectedProject = computed(() =>
   projects.value.find((project) => project.id === selectedProjectId.value) || projects.value[0]
@@ -88,7 +91,19 @@ onMounted(() => {
   const stopSqlDiagnostics = installLocalSqlDiagnostics();
   const offSync = db.syncClient.on('sync', (event) => {
     console.info('[sync-event] sync', event);
+    lastSync.value = new Date();
+    if (event?.result?.__orangeDualSync?.swapped === false) {
+      console.info('[sync-event] no-op; local refresh skipped');
+      setIdleStatus();
+      return;
+    }
     void refreshAfterSync();
+  });
+  const offProgress = db.syncClient.on('sync-progress', (event) => {
+    console.info('[sync-progress]', event);
+    trackWorkerSyncProgress(event);
+    if (activeOperations.value.length === 0)
+      status.value = syncProgressLabel(event?.phase, event?.queueDepth);
   });
   const offError = db.syncClient.on('error', (event) => {
     console.error('[sync-event] error', event);
@@ -98,6 +113,7 @@ onMounted(() => {
     stopSqlDiagnostics();
     stopDiagnostics();
     offSync();
+    offProgress();
     offError();
     stopSyncEventListeners = () => {};
   };
@@ -112,15 +128,72 @@ onBeforeUnmount(() => {
   void stopSyncClient();
 });
 
-async function refreshAfterSync() {
-  lastSync.value = new Date();
-  try {
-    await refreshLocal();
-    setIdleStatus();
+function refreshAfterSync() {
+  refreshAfterSyncRequested = true;
+  if (!refreshAfterSyncPromise) {
+    refreshAfterSyncPromise = drainRefreshAfterSync()
+      .finally(() => {
+        refreshAfterSyncPromise = null;
+      });
   }
-  catch (e) {
-    console.error('[sync-event] refresh failed', e);
-    setErrorStatus(e);
+  return refreshAfterSyncPromise;
+}
+
+async function drainRefreshAfterSync() {
+  while (refreshAfterSyncRequested) {
+    refreshAfterSyncRequested = false;
+    try {
+      await refreshLocal();
+      setIdleStatus();
+    }
+    catch (e) {
+      console.error('[sync-event] refresh failed', e);
+      setErrorStatus(e);
+    }
+  }
+}
+
+function syncProgressLabel(phase: string | undefined, queueDepth?: number) {
+  if (phase === 'queued')
+    return `Sync queued${queueDepth ? ` (${queueDepth})` : ''}`;
+  if (phase === 'waiting-for-sync-lock')
+    return 'Waiting for sync lock';
+  if (phase === 'pushing-active')
+    return 'Pushing local changes';
+  if (phase === 'updating-staging')
+    return 'Updating staging database';
+  if (phase === 'pulling-staging')
+    return 'Pulling server changes';
+  if (phase === 'waiting-for-write-barrier')
+    return 'Preparing database swap';
+  if (phase === 'swapping')
+    return 'Swapping active database';
+  if (phase === 'complete')
+    return 'Sync complete';
+  if (phase === 'network-start')
+    return 'Syncing with server';
+  return 'Preparing sync';
+}
+
+function trackWorkerSyncProgress(event) {
+  if (!event || !currentSyncDiagnostics)
+    return;
+  if (event.phase === 'network-start' && Number.isFinite(event.requestId)) {
+    const request: SyncDiagnosticsRequest = {
+      id: event.requestId,
+      phase: syncPhase(event.requestPhase),
+      itemCount: Number(event.itemCount || 0),
+      startedAt: performance.now()
+    };
+    workerSyncDiagnosticsRequests.set(event.requestId, request);
+    currentSyncDiagnostics.startRequest(request);
+    return;
+  }
+  if (event.phase === 'network-end' && Number.isFinite(event.requestId)) {
+    const request = workerSyncDiagnosticsRequests.get(event.requestId);
+    workerSyncDiagnosticsRequests.delete(event.requestId);
+    if (request)
+      currentSyncDiagnostics.finishRequest(request, { returnedItems: event.returnedItems }, !!event.failed);
   }
 }
 
@@ -546,7 +619,9 @@ function beginSyncDiagnostics(label: string) {
       const endedAt = performance.now();
       lastNetworkEndedAt = Math.max(lastNetworkEndedAt || endedAt, endedAt);
       const elapsedMs = Math.round(endedAt - request.startedAt);
-      const responseItems = Array.isArray(payload?.items) ? payload.items.length : 0;
+      const responseItems = Array.isArray(payload?.items)
+        ? payload.items.length
+        : Number(payload?.returnedItems || 0);
 
       if (request.phase === 'keys') {
         keysRequests += 1;
@@ -574,6 +649,7 @@ function beginSyncDiagnostics(label: string) {
       finished = true;
       if (currentSyncDiagnostics === diagnostics)
         currentSyncDiagnostics = null;
+      workerSyncDiagnosticsRequests.clear();
       const finalTotalMs = totalMs ?? Math.round(performance.now() - startedAt);
       const networkWallMs = firstNetworkStartedAt === null || lastNetworkEndedAt === null
         ? 0
