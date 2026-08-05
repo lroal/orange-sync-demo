@@ -5,6 +5,7 @@ import {
   bigMode,
   localDbName,
   sqliteBusyTimeoutMs,
+  sqliteVfs,
   syncAutoIntervalMs,
   syncOperationTimeoutMs,
   syncPullApplyMaxRowsPerTransaction,
@@ -18,7 +19,7 @@ import {
 console.dir({
   bigMode,
   localDbName,
-  sqliteVfs: 'opfs-wl',
+  sqliteVfs,
   sqliteSingleWorker: true,
   syncWorkerSqliteSingleWorker: true,
   sqliteBusyTimeoutMs,
@@ -47,7 +48,7 @@ const syncPullApply = syncPullApplyMaxRowsPerTransaction
 const sqliteWorkerOptions = {
   busyTimeoutMs: sqliteBusyTimeoutMs,
   singleWorker: true,
-  vfs: 'opfs-wl',
+  vfs: sqliteVfs,
   sync: {
     url: syncUrl,
     auto: {
@@ -86,7 +87,7 @@ for (const connectionString of localDbConnectionStrings) {
   console.info(
     '[sqlite-worker]',
     connectionString,
-    'vfs=opfs-wl'
+    `vfs=${sqliteVfs}`
   );
 }
 const sqliteOptions = {

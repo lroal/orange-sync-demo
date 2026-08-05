@@ -3,6 +3,7 @@ export const normalLocalDbName = 'orange-sync-demo_vfs2.sqlite3';
 export const bigLocalDbName = 'orange-sync-demo-big2.sqlite3';
 export const bigMode = import.meta.env.VITE_BIG_MODE === '1';
 export const localDbName = bigMode ? bigLocalDbName : normalLocalDbName;
+export const sqliteVfs = parseSqliteVfs(import.meta.env.VITE_SQLITE_VFS);
 export const sqliteBusyTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SQLITE_BUSY_TIMEOUT_MS, 5000);
 export const syncOperationTimeoutMs = parsePositiveInteger(import.meta.env.VITE_SYNC_OPERATION_TIMEOUT_MS, 300000);
 export const syncAutoIntervalMs = parseNonNegativeInteger(import.meta.env.VITE_SYNC_AUTO_INTERVAL_MS, 5000);
@@ -11,9 +12,17 @@ export const syncPullMaxKeysPerBatch = parseOptionalPositiveInteger(import.meta.
 export const syncPullMaxRowsPerBatch = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_MAX_ROWS_PER_BATCH);
 export const syncPullApplyMaxRowsPerTransaction = parseOptionalPositiveInteger(import.meta.env.VITE_SYNC_PULL_APPLY_MAX_ROWS_PER_TRANSACTION);
 export const syncPullApplyYieldMs = parseNonNegativeInteger(import.meta.env.VITE_SYNC_PULL_APPLY_YIELD_MS, 0);
-export const syncDiagnosticsEnabled = import.meta.env.VITE_SYNC_DIAGNOSTICS !== '0';
-export const sqlDiagnosticsEnabled = import.meta.env.VITE_SQL_DIAGNOSTICS !== '0';
+export const syncDiagnosticsEnabled = import.meta.env.VITE_SYNC_DIAGNOSTICS === '1';
+export const sqlDiagnosticsEnabled = import.meta.env.VITE_SQL_DIAGNOSTICS === '1';
 export const sqlDiagnosticsSlowMs = parseNonNegativeInteger(import.meta.env.VITE_SQL_DIAGNOSTICS_SLOW_MS, 50);
+
+function parseSqliteVfs(value) {
+  if (!value)
+    return 'opfs-wl';
+  if (value === 'opfs-wl' || value === 'opfs-sahpool')
+    return value;
+  throw new Error('VITE_SQLITE_VFS must be "opfs-wl" or "opfs-sahpool".');
+}
 
 function parsePositiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);

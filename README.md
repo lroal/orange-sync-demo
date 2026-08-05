@@ -54,13 +54,13 @@ The project list is paged so the UI only reads one page from local SQLite at a t
 
 Use browser network throttling to simulate low bandwidth; the demo does not add artificial server delay or change sync batch sizes for these profiles.
 
-Bootstrap sync diagnostics are logged in the browser console and summarized in the sidebar. The demo uses Orange ORM pull defaults unless these optional overrides are set:
+Bootstrap sync diagnostics are disabled by default. Set `VITE_SYNC_DIAGNOSTICS=1` to log detailed sync progress in the browser console and show the timing summary in the sidebar. The demo uses Orange ORM pull defaults unless these optional overrides are set:
 
 ```bash
 VITE_SYNC_PULL_MAX_CONCURRENT_ROW_REQUESTS=8 npm run dev:big
 VITE_SYNC_PULL_MAX_KEYS_PER_BATCH=4000 npm run dev:big
 VITE_SYNC_PULL_MAX_ROWS_PER_BATCH=250 npm run dev:big
-VITE_SYNC_DIAGNOSTICS=0 npm run dev:big
+VITE_SYNC_DIAGNOSTICS=1 npm run dev:big
 ```
 
 ## Model

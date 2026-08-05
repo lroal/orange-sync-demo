@@ -32,13 +32,28 @@ type SyncDiagnosticsRequest = {
 type SyncDiagnosticsSummary = {
   label: string;
   totalMs: number;
-  networkWallMs: number;
+  networkActiveMs: number;
   nonNetworkMs: number;
   maxActiveRows: number;
   keysRequests: number;
   rowsRequests: number;
   rowItems: number;
   keyItems: number;
+  staging?: PullStagingSummary;
+};
+
+type PullStagingSummary = {
+  elapsedMs: number;
+  batchCount: number;
+  rowCount: number;
+  journalInsertMs: number;
+  dataApplyMs: number;
+  stableBaseMs: number;
+  bulkStableBaseMs: number;
+  transactionFinalizeMs: number;
+  deltaPersistMs: number;
+  deltaFinalizeMs: number;
+  deferredStableBase: boolean;
 };
 
 const projectPage = ref(0);
@@ -90,20 +105,24 @@ onMounted(() => {
   const stopDiagnostics = installSyncDiagnostics();
   const stopSqlDiagnostics = installLocalSqlDiagnostics();
   const offSync = db.syncClient.on('sync', (event) => {
-    console.info('[sync-event] sync', event);
+    if (syncDiagnosticsEnabled)
+      console.info('[sync-event] sync', event);
     lastSync.value = new Date();
     if (event?.result?.__orangeDualSync?.swapped === false) {
-      console.info('[sync-event] no-op; local refresh skipped');
+      if (syncDiagnosticsEnabled)
+        console.info('[sync-event] no-op; local refresh skipped');
       setIdleStatus();
       return;
     }
     void refreshAfterSync();
   });
   const offProgress = db.syncClient.on('sync-progress', (event) => {
-    console.info('[sync-progress]', event);
-    trackWorkerSyncProgress(event);
+    if (syncDiagnosticsEnabled) {
+      console.info('[sync-progress]', event);
+      trackWorkerSyncProgress(event);
+    }
     if (activeOperations.value.length === 0)
-      status.value = syncProgressLabel(event?.phase, event?.queueDepth);
+      status.value = syncProgressLabel(event);
   });
   const offError = db.syncClient.on('error', (event) => {
     console.error('[sync-event] error', event);
@@ -153,7 +172,15 @@ async function drainRefreshAfterSync() {
   }
 }
 
-function syncProgressLabel(phase: string | undefined, queueDepth?: number) {
+function syncProgressLabel(event: {
+  phase?: string;
+  queueDepth?: number;
+  targetRole?: 'a' | 'b';
+  processedItems?: number;
+  totalItems?: number;
+} | undefined) {
+  const phase = event?.phase;
+  const queueDepth = event?.queueDepth;
   if (phase === 'queued')
     return `Sync queued${queueDepth ? ` (${queueDepth})` : ''}`;
   if (phase === 'waiting-for-sync-lock')
@@ -162,6 +189,12 @@ function syncProgressLabel(phase: string | undefined, queueDepth?: number) {
     return 'Pushing local changes';
   if (phase === 'updating-staging')
     return 'Updating staging database';
+  if (phase === 'applying-delta') {
+    const target = event?.targetRole ? ` ${event.targetRole.toUpperCase()}` : '';
+    const processed = Number(event?.processedItems || 0).toLocaleString();
+    const total = Number(event?.totalItems || 0).toLocaleString();
+    return `Updating inactive database${target} ${processed} / ${total}`;
+  }
   if (phase === 'pulling-staging')
     return 'Pulling server changes';
   if (phase === 'waiting-for-write-barrier')
@@ -178,6 +211,10 @@ function syncProgressLabel(phase: string | undefined, queueDepth?: number) {
 function trackWorkerSyncProgress(event) {
   if (!event || !currentSyncDiagnostics)
     return;
+  if (event.phase === 'pull-staging-summary') {
+    currentSyncDiagnostics.recordStagingSummary(event);
+    return;
+  }
   if (event.phase === 'network-start' && Number.isFinite(event.requestId)) {
     const request: SyncDiagnosticsRequest = {
       id: event.requestId,
@@ -326,16 +363,19 @@ async function resetAndBootstrapFromServer() {
   const resetResult = await db.syncClient.resetLocal();
   logDualRouting('reset', resetResult);
   clearLocalView();
-  const diagnostics = beginSyncDiagnostics('bootstrap');
+  const diagnostics = syncDiagnosticsEnabled ? beginSyncDiagnostics('bootstrap') : null;
+  lastBootstrapDiagnostics.value = null;
   const bootstrapStartedAt = performance.now();
   try {
     await startSyncClient();
   }
   finally {
     lastBootstrapSyncMs.value = Math.round(performance.now() - bootstrapStartedAt);
-    const summary = diagnostics.finish(lastBootstrapSyncMs.value);
-    lastBootstrapDiagnostics.value = summary;
-    console.info('[bootstrap-sync]', `${lastBootstrapSyncMs.value}ms`, summary);
+    if (diagnostics) {
+      const summary = diagnostics.finish(lastBootstrapSyncMs.value);
+      lastBootstrapDiagnostics.value = summary;
+      console.info('[bootstrap-sync]', `${lastBootstrapSyncMs.value}ms`, summary);
+    }
   }
 }
 
@@ -435,53 +475,57 @@ async function addServerTaskCommand() {
     return;
   await run('server-commands', 'Running server commands', async () => {
     const stamp = new Date().toLocaleTimeString();
-    await db.transaction(async (tx, ct) => {
-      await tx.commands.addServerTask({
-        projectId: p.id,
-        title: `Server command A ${stamp}`
-      });
-      await tx.commands.addServerTask({
-        projectId: p.id,
-        title: `Server command B ${stamp}`
-      });
-
-      const projectId = crypto.randomUUID();
-      const owner = people.value[0];
-      const pr = await tx.project.insert({
-        id: projectId,
-        ownerId: owner.id,
-        title: `Local sync test ${stamp}`,
-        status: 'draft',
-        updatedAt: new Date(),
-        detail: {
-          id: crypto.randomUUID(),
-          projectId,
-          summary: 'Created locally. Push sends the patch transaction to Postgres.',
-          riskLevel: 'low'
-        },
-        
-        tasks: [
-          {
-            id: crypto.randomUUID(),
-            projectId,
-            assigneeId: owner.id,
-            title: 'Push this local task',
-            done: false,
-            sortOrder: 1
-          }
-        ]
-      });
-      ct.memory = pr;
-      ct.context.row = pr;
-      ct.context.operation = 'foo';
-      ct.context.bar = {bar: 1};
-    });
-    db.syncClient.once('operation:foo', (e) => {
+    const offOperation = db.syncClient.once('operation:foo', (e) => {
       console.dir('operation')
       console.dir(e);
     });
-    lastSync.value = new Date();
-    await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
+    try {
+      await db.transaction(async (tx, ct) => {
+        await tx.commands.addServerTask({
+          projectId: p.id,
+          title: `Server command A ${stamp}`
+        });
+        await tx.commands.addServerTask({
+          projectId: p.id,
+          title: `Server command B ${stamp}`
+        });
+
+        const projectId = crypto.randomUUID();
+        const owner = people.value[0];
+        const pr = await tx.project.insert({
+          id: projectId,
+          ownerId: owner.id,
+          title: `Local sync test ${stamp}`,
+          status: 'draft',
+          updatedAt: new Date(),
+          detail: {
+            id: crypto.randomUUID(),
+            projectId,
+            summary: 'Created locally. Push sends the patch transaction to Postgres.',
+            riskLevel: 'low'
+          },
+
+          tasks: [
+            {
+              id: crypto.randomUUID(),
+              projectId,
+              assigneeId: owner.id,
+              title: 'Push this local task',
+              done: false,
+              sortOrder: 1
+            }
+          ]
+        });
+        ct.memory = pr;
+        ct.context.row = pr;
+        ct.context.operation = 'foo';
+        ct.context.bar = {bar: 1};
+      });
+    }
+    catch (error) {
+      offOperation();
+      throw error;
+    }
   });
 }
 
@@ -497,8 +541,7 @@ async function flipStatus() {
 }
 
 async function startSyncClient() {
-  const result = await db.syncClient.sync({ timeoutMs: syncOperationTimeoutMs });
-  logDualRouting('sync', result);
+  await db.syncClient.start();
   setIdleStatus();
 }
 
@@ -573,6 +616,8 @@ function summarizeSql(sql) {
 }
 
 function logDualRouting(operation, result) {
+  if (!syncDiagnosticsEnabled)
+    return;
   const info = result?.__orangeDualSync || result;
   if (!info || !info.activeRole || !info.stagingRole)
     return;
@@ -594,20 +639,18 @@ function beginSyncDiagnostics(label: string) {
   const startedAt = performance.now();
   let activeRows = 0;
   let maxActiveRows = 0;
-  let firstNetworkStartedAt: number | null = null;
-  let lastNetworkEndedAt: number | null = null;
   let keysRequests = 0;
   let rowsRequests = 0;
   let keyItems = 0;
   let rowItems = 0;
+  let stagingSummary: PullStagingSummary | undefined;
   let finished = false;
+  const networkIntervals: Array<{ startedAt: number; endedAt: number }> = [];
 
   const diagnostics = {
     startRequest(request: SyncDiagnosticsRequest) {
       if (finished)
         return;
-      if (firstNetworkStartedAt === null || request.startedAt < firstNetworkStartedAt)
-        firstNetworkStartedAt = request.startedAt;
       if (request.phase === 'rows') {
         activeRows += 1;
         maxActiveRows = Math.max(maxActiveRows, activeRows);
@@ -617,7 +660,7 @@ function beginSyncDiagnostics(label: string) {
       if (finished)
         return;
       const endedAt = performance.now();
-      lastNetworkEndedAt = Math.max(lastNetworkEndedAt || endedAt, endedAt);
+      networkIntervals.push({ startedAt: request.startedAt, endedAt });
       const elapsedMs = Math.round(endedAt - request.startedAt);
       const responseItems = Array.isArray(payload?.items)
         ? payload.items.length
@@ -645,25 +688,27 @@ function beginSyncDiagnostics(label: string) {
         `maxActiveRows=${maxActiveRows}`
       );
     },
+    recordStagingSummary(event): void {
+      stagingSummary = toPullStagingSummary(event);
+    },
     finish(totalMs?: number): SyncDiagnosticsSummary {
       finished = true;
       if (currentSyncDiagnostics === diagnostics)
         currentSyncDiagnostics = null;
       workerSyncDiagnosticsRequests.clear();
       const finalTotalMs = totalMs ?? Math.round(performance.now() - startedAt);
-      const networkWallMs = firstNetworkStartedAt === null || lastNetworkEndedAt === null
-        ? 0
-        : Math.round(lastNetworkEndedAt - firstNetworkStartedAt);
+      const networkActiveMs = mergedIntervalDuration(networkIntervals);
       return {
         label,
         totalMs: finalTotalMs,
-        networkWallMs,
-        nonNetworkMs: Math.max(0, finalTotalMs - networkWallMs),
+        networkActiveMs,
+        nonNetworkMs: Math.max(0, finalTotalMs - networkActiveMs),
         maxActiveRows,
         keysRequests,
         rowsRequests,
         rowItems,
-        keyItems
+        keyItems,
+        staging: stagingSummary
       };
     }
   };
@@ -676,6 +721,44 @@ function beginSyncDiagnostics(label: string) {
     apply: formatApplyConfig()
   });
   return diagnostics;
+}
+
+function toPullStagingSummary(event): PullStagingSummary {
+  return {
+    elapsedMs: Number(event?.elapsedMs || 0),
+    batchCount: Number(event?.batchCount || 0),
+    rowCount: Number(event?.rowCount || 0),
+    journalInsertMs: Number(event?.journalInsertMs || 0),
+    dataApplyMs: Number(event?.dataApplyMs || 0),
+    stableBaseMs: Number(event?.stableBaseMs || 0),
+    bulkStableBaseMs: Number(event?.bulkStableBaseMs || 0),
+    transactionFinalizeMs: Number(event?.transactionFinalizeMs || 0),
+    deltaPersistMs: Number(event?.deltaPersistMs || 0),
+    deltaFinalizeMs: Number(event?.deltaFinalizeMs || 0),
+    deferredStableBase: event?.deferredStableBase === true
+  };
+}
+
+function mergedIntervalDuration(intervals: Array<{ startedAt: number; endedAt: number }>): number {
+  const sorted = intervals
+    .filter(interval => Number.isFinite(interval.startedAt) && Number.isFinite(interval.endedAt))
+    .sort((left, right) => left.startedAt - right.startedAt);
+  if (sorted.length === 0)
+    return 0;
+  let total = 0;
+  let startedAt = sorted[0].startedAt;
+  let endedAt = sorted[0].endedAt;
+  for (let i = 1; i < sorted.length; i++) {
+    const interval = sorted[i];
+    if (interval.startedAt <= endedAt) {
+      endedAt = Math.max(endedAt, interval.endedAt);
+      continue;
+    }
+    total += endedAt - startedAt;
+    startedAt = interval.startedAt;
+    endedAt = interval.endedAt;
+  }
+  return Math.round(total + endedAt - startedAt);
 }
 
 function syncPhase(value): SyncPhase {
@@ -759,7 +842,10 @@ async function run(key, message, fn) {
         <p v-else>Waiting for first sync</p>
         <p v-if="lastBootstrapSyncMs !== null">Last bootstrap {{ formatElapsed(lastBootstrapSyncMs) }}</p>
         <p v-if="lastBootstrapDiagnostics">
-          rows max {{ lastBootstrapDiagnostics.maxActiveRows }} · rows req {{ lastBootstrapDiagnostics.rowsRequests }} · net {{ formatElapsed(lastBootstrapDiagnostics.networkWallMs) }} · other {{ formatElapsed(lastBootstrapDiagnostics.nonNetworkMs) }}
+          rows max {{ lastBootstrapDiagnostics.maxActiveRows }} · rows req {{ lastBootstrapDiagnostics.rowsRequests }} · net active {{ formatElapsed(lastBootstrapDiagnostics.networkActiveMs) }} · outside net {{ formatElapsed(lastBootstrapDiagnostics.nonNetworkMs) }}
+        </p>
+        <p v-if="lastBootstrapDiagnostics?.staging">
+          staging {{ formatElapsed(lastBootstrapDiagnostics.staging.elapsedMs) }} · data {{ formatElapsed(lastBootstrapDiagnostics.staging.dataApplyMs) }} · base {{ formatElapsed(lastBootstrapDiagnostics.staging.stableBaseMs + lastBootstrapDiagnostics.staging.bulkStableBaseMs) }} · finalize {{ formatElapsed(lastBootstrapDiagnostics.staging.transactionFinalizeMs) }}
         </p>
         <p v-if="runningOperationCount">
           {{ runningOperationCount }} operation{{ runningOperationCount === 1 ? '' : 's' }} running
